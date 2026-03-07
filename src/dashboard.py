@@ -1,92 +1,176 @@
-import pandas as pd
-import plotly.express as px
 import os
+import pandas as pd
+import matplotlib.pyplot as plt
 
-DATA_FOLDER = "../data"
-OUTPUT_FILE = "../output/dashboard.html"
+# ==============================
+# CONFIGURACIÓN DE RUTAS
+# ==============================
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+DATA_FOLDER = os.path.join(BASE_DIR, "data")
+OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
+
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+
+# ==============================
+# DETECTAR TABLAS EN EL EXCEL
+# ==============================
+
+def detect_tables(excel_file):
+
+    df = pd.read_excel(excel_file, header=None)
+
+    header_rows = df[
+        df.apply(
+            lambda row: row.astype(str)
+            .str.contains("Ejecutivo Operación", case=False)
+            .any(),
+            axis=1,
+        )
+    ].index.tolist()
+
+    if len(header_rows) < 2:
+        raise Exception("No se detectaron dos tablas en el Excel")
+
+    header1 = header_rows[0]
+    header2 = header_rows[1]
+
+    tabla_equipos = pd.read_excel(excel_file, skiprows=header1)
+    tabla_individual = pd.read_excel(excel_file, skiprows=header2)
+
+    tabla_equipos = tabla_equipos.dropna(how="all")
+    tabla_individual = tabla_individual.dropna(how="all")
+
+    return tabla_equipos, tabla_individual
+
+
+# ==============================
+# CARGAR ARCHIVOS EXCEL
+# ==============================
 
 def load_data():
 
     files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".xlsx")]
 
-    dfs = []
+    if not files:
+        raise Exception("No hay archivos Excel en la carpeta data")
+
+    equipos_total = []
+    individuales_total = []
 
     for file in files:
 
         path = os.path.join(DATA_FOLDER, file)
 
-        df = pd.read_excel(path, header=10)
+        print(f"Procesando: {file}")
 
-        df = df.dropna(subset=["UDN"])
+        equipos, individuales = detect_tables(path)
 
-        df["Fecha Generación"] = pd.to_datetime(
-            df["Fecha Generación"], errors="coerce"
-        )
+        equipos_total.append(equipos)
+        individuales_total.append(individuales)
 
-        df["Mes"] = df["Fecha Generación"].dt.to_period("M").astype(str)
+    equipos_df = pd.concat(equipos_total, ignore_index=True)
+    individuales_df = pd.concat(individuales_total, ignore_index=True)
 
-        dfs.append(df)
-
-    return pd.concat(dfs)
+    return equipos_df, individuales_df
 
 
-def create_dashboard(data):
+# ==============================
+# KPIs
+# ==============================
 
-    udn = data["UDN"].value_counts().reset_index()
-    udn.columns = ["UDN", "Operaciones"]
+def calculate_kpis(equipos, individuales):
 
-    fig1 = px.bar(udn, x="UDN", y="Operaciones", title="Operaciones por UDN")
+    total_operaciones = individuales["Operaciones"].sum()
 
-    mes = data.groupby("Mes").size().reset_index(name="Operaciones")
+    total_ejecutivos = individuales["Ejecutivo Operación"].nunique()
 
-    fig2 = px.line(mes, x="Mes", y="Operaciones", markers=True)
+    total_equipos = equipos["Ejecutivo Operación"].nunique()
 
-    ejecutivos = data["Ejecutivo"].value_counts().head(10).reset_index()
-    ejecutivos.columns = ["Ejecutivo", "Operaciones"]
+    promedio = individuales["Operaciones"].mean()
 
-    fig3 = px.bar(ejecutivos, x="Ejecutivo", y="Operaciones")
+    print("\n===== KPIs =====")
 
-    clientes = data["Cliente"].value_counts().head(10).reset_index()
-    clientes.columns = ["Cliente", "Operaciones"]
+    print("Operaciones totales:", total_operaciones)
+    print("Total ejecutivos:", total_ejecutivos)
+    print("Total equipos:", total_equipos)
+    print("Promedio operaciones por ejecutivo:", round(promedio, 2))
 
-    fig4 = px.bar(clientes, x="Cliente", y="Operaciones")
 
-    from plotly.subplots import make_subplots
+# ==============================
+# GRAFICA EQUIPOS
+# ==============================
 
-    dashboard = make_subplots(
-        rows=2,
-        cols=2,
-        subplot_titles=(
-            "Operaciones por UDN",
-            "Operaciones por Mes",
-            "Top Ejecutivos",
-            "Top Clientes",
-        ),
+def grafica_equipos(equipos):
+
+    equipos_group = (
+        equipos.groupby("Ejecutivo Operación")["Operaciones"]
+        .sum()
+        .sort_values(ascending=False)
     )
 
-    for trace in fig1.data:
-        dashboard.add_trace(trace, row=1, col=1)
+    plt.figure()
 
-    for trace in fig2.data:
-        dashboard.add_trace(trace, row=1, col=2)
+    equipos_group.plot(kind="bar")
 
-    for trace in fig3.data:
-        dashboard.add_trace(trace, row=2, col=1)
+    plt.title("Operaciones por Equipo")
+    plt.xlabel("Jefe de Equipo")
+    plt.ylabel("Operaciones")
 
-    for trace in fig4.data:
-        dashboard.add_trace(trace, row=2, col=2)
+    path = os.path.join(OUTPUT_FOLDER, "operaciones_equipos.png")
 
-    dashboard.write_html(OUTPUT_FILE)
+    plt.tight_layout()
+    plt.savefig(path)
 
-    print("Dashboard generado:", OUTPUT_FILE)
+    print("Gráfica guardada:", path)
 
+
+# ==============================
+# GRAFICA INDIVIDUAL
+# ==============================
+
+def grafica_individual(individuales):
+
+    top = (
+        individuales.groupby("Ejecutivo Operación")["Operaciones"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(10)
+    )
+
+    plt.figure()
+
+    top.plot(kind="bar")
+
+    plt.title("Top 10 Ejecutivos")
+    plt.xlabel("Ejecutivo")
+    plt.ylabel("Operaciones")
+
+    path = os.path.join(OUTPUT_FOLDER, "top_ejecutivos.png")
+
+    plt.tight_layout()
+    plt.savefig(path)
+
+    print("Gráfica guardada:", path)
+
+
+# ==============================
+# MAIN
+# ==============================
 
 def main():
 
-    data = load_data()
+    equipos, individuales = load_data()
 
-    create_dashboard(data)
+    calculate_kpis(equipos, individuales)
+
+    grafica_equipos(equipos)
+
+    grafica_individual(individuales)
+
+    print("\nDashboard generado correctamente")
 
 
 if __name__ == "__main__":
