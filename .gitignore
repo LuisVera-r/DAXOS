@@ -1,5 +1,5 @@
-venv/
+data/historico.pkl
+data/equipos.json
 __pycache__/
 *.pyc
-output/*.html
 .DS_Store

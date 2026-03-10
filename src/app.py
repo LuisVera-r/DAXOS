@@ -1,860 +1,929 @@
-import os
+"""
+app.py — Dashboard Operaciones de Comercio Exterior
+Incluye: SLA por etapa (días hábiles + feriados MX), asignación de clientes a jefes,
+análisis de apoyo entre equipos, selector libre de etapas.
+"""
+from __future__ import annotations
+import json
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import matplotlib.ticker as mticker
-import numpy as np
-from typing import Union, List
 
-# ==============================
-# CONFIGURACIÓN DE RUTAS
-# ==============================
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_FOLDER = os.path.join(BASE_DIR, "data")
+import core
+import sla as SLA
+import clientes as CLI
 
-st.set_page_config(
-    page_title="OPS · CE Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    page_icon="⬡",
-)
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(page_title="OPS · CE", layout="wide",
+                   initial_sidebar_state="expanded", page_icon="⬡")
 
-# ── Tema visual ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap');
+html,body,[class*="css"]{font-family:'Space Grotesk',sans-serif;background:#080C14;color:#C9D4E8}
+.block-container{padding:1.6rem 2.2rem 3rem;max-width:1700px}
+.top-bar{height:3px;background:linear-gradient(90deg,#00D9FF,#6C63FF,#FF4F7B);
+         margin:-1.6rem -2.2rem 1.6rem;border-radius:0 0 4px 4px}
+[data-testid="metric-container"]{background:linear-gradient(135deg,#0F1623,#111927);
+  border:1px solid #1C2640;border-top:2px solid #00D9FF22;border-radius:12px;padding:.9rem 1.2rem .7rem}
+[data-testid="metric-container"] label{font-family:'DM Mono',monospace;font-size:.6rem;
+  letter-spacing:.16em;text-transform:uppercase;color:#4A5F80}
+[data-testid="metric-container"] [data-testid="metric-value"]{font-family:'DM Mono',monospace;
+  font-size:1.75rem;font-weight:500;color:#00D9FF}
+h1{font-family:'DM Mono',monospace!important;font-size:.95rem!important;
+   letter-spacing:.22em!important;text-transform:uppercase!important;color:#E8F0FF!important;font-weight:500!important}
+h2,h3{font-family:'DM Mono',monospace!important;font-size:.65rem!important;
+      letter-spacing:.16em!important;text-transform:uppercase!important;
+      color:#4A5F80!important;margin-top:1rem!important;margin-bottom:.5rem!important}
+[data-testid="stSidebar"]{background:#080C14;border-right:1px solid #1C2640}
+[data-testid="stSidebar"] label{font-family:'DM Mono',monospace;font-size:.64rem;
+  letter-spacing:.1em;text-transform:uppercase;color:#4A5F80}
+[data-testid="stTabs"] button{font-family:'DM Mono',monospace;font-size:.63rem;
+  letter-spacing:.12em;text-transform:uppercase;color:#4A5F80;padding:.45rem .9rem}
+[data-testid="stTabs"] button[aria-selected="true"]{color:#00D9FF;border-bottom:2px solid #00D9FF}
+[data-testid="stDataFrame"]{border:1px solid #1C2640;border-radius:10px;overflow:hidden}
+hr{border-color:#1C2640;margin:.8rem 0}
+.badge{display:inline-block;font-family:'DM Mono',monospace;font-size:.58rem;
+  letter-spacing:.1em;text-transform:uppercase;padding:.16rem .5rem;border-radius:20px;margin:.12rem}
+.imp{background:#00D9FF18;color:#00D9FF;border:1px solid #00D9FF33}
+.exp{background:#FF4F7B18;color:#FF7B9A;border:1px solid #FF4F7B33}
+.udn{background:#6C63FF18;color:#9D97FF;border:1px solid #6C63FF33}
+.ok{background:#34D39918;color:#34D399;border:1px solid #34D39933}
+.warn{background:#FFB54718;color:#FFB547;border:1px solid #FFB54733}
+.fail{background:#FF4F7B18;color:#FF7B9A;border:1px solid #FF4F7B33}
+</style>""", unsafe_allow_html=True)
 
-/* --- Base --- */
-html, body, [class*="css"] {
-    font-family: 'Space Grotesk', sans-serif;
-    background-color: #080C14;
-    color: #C9D4E8;
-}
-.block-container { padding: 1.8rem 2.5rem 3rem; max-width: 1600px; }
-
-/* --- Barra superior decorativa --- */
-.top-bar {
-    height: 3px;
-    background: linear-gradient(90deg, #00D9FF 0%, #6C63FF 50%, #FF4F7B 100%);
-    margin: -1.8rem -2.5rem 2rem;
-    border-radius: 0 0 4px 4px;
-}
-
-/* --- KPI Cards --- */
-[data-testid="metric-container"] {
-    background: linear-gradient(135deg, #0F1623 0%, #111927 100%);
-    border: 1px solid #1C2640;
-    border-top: 2px solid #00D9FF22;
-    border-radius: 12px;
-    padding: 1.2rem 1.5rem 1rem;
-    transition: border-color 0.2s;
-}
-[data-testid="metric-container"]:hover { border-color: #00D9FF44; }
-[data-testid="metric-container"] label {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.65rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: #4A5F80;
-}
-[data-testid="metric-container"] [data-testid="metric-value"] {
-    font-family: 'DM Mono', monospace;
-    font-size: 2.1rem;
-    font-weight: 500;
-    color: #00D9FF;
-    letter-spacing: -0.02em;
-}
-[data-testid="stMetricDelta"] svg { display: none; }
-[data-testid="stMetricDelta"] { font-size: 0.75rem; color: #4A5F80 !important; }
-
-/* --- Headers --- */
-h1 {
-    font-family: 'DM Mono', monospace !important;
-    font-size: 1.1rem !important;
-    letter-spacing: 0.25em !important;
-    text-transform: uppercase !important;
-    color: #E8F0FF !important;
-    font-weight: 500 !important;
-}
-h2, h3 {
-    font-family: 'DM Mono', monospace !important;
-    font-size: 0.7rem !important;
-    letter-spacing: 0.2em !important;
-    text-transform: uppercase !important;
-    color: #4A5F80 !important;
-    margin-top: 1.5rem !important;
-    margin-bottom: 0.8rem !important;
-}
-
-/* --- Sidebar --- */
-[data-testid="stSidebar"] {
-    background: #080C14;
-    border-right: 1px solid #1C2640;
-    padding-top: 1rem;
-}
-[data-testid="stSidebar"] label {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.68rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #4A5F80;
-}
-[data-testid="stSidebar"] .stSelectbox > div > div {
-    background: #0F1623;
-    border-color: #1C2640;
-    color: #C9D4E8;
-    font-size: 0.82rem;
-}
-[data-testid="stSidebar"] .stMultiSelect > div {
-    background: #0F1623;
-    border-color: #1C2640;
-}
-
-/* --- Tabs --- */
-[data-testid="stTabs"] {
-    border-bottom: 1px solid #1C2640;
-}
-[data-testid="stTabs"] button {
-    font-family: 'DM Mono', monospace;
-    font-size: 0.68rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: #4A5F80;
-    padding: 0.5rem 1.1rem;
-    border-radius: 0;
-}
-[data-testid="stTabs"] button:hover { color: #C9D4E8; }
-[data-testid="stTabs"] button[aria-selected="true"] {
-    color: #00D9FF;
-    border-bottom: 2px solid #00D9FF;
-    background: transparent;
-}
-
-/* --- Dataframe --- */
-[data-testid="stDataFrame"] {
-    border: 1px solid #1C2640;
-    border-radius: 10px;
-    overflow: hidden;
-}
-.stDataFrame thead th {
-    background: #0F1623 !important;
-    font-family: 'DM Mono', monospace !important;
-    font-size: 0.68rem !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.1em !important;
-    color: #4A5F80 !important;
-}
-
-/* --- Divider --- */
-hr { border-color: #1C2640; margin: 1.2rem 0; }
-
-/* --- Alert/info --- */
-[data-testid="stAlert"] {
-    background: #0F1623;
-    border: 1px solid #1C2640;
-    border-radius: 8px;
-    font-size: 0.82rem;
-    color: #4A5F80;
-}
-
-/* --- Caption --- */
-.stCaption { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #4A5F80; letter-spacing: 0.06em; }
-
-/* --- Progress bars y misc --- */
-.stProgress > div > div { background: linear-gradient(90deg, #00D9FF, #6C63FF); }
-
-/* --- Pill badge (html directo) --- */
-.badge {
-    display: inline-block;
-    font-family: 'DM Mono', monospace;
-    font-size: 0.62rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.2rem 0.6rem;
-    border-radius: 20px;
-    margin-right: 0.3rem;
-    margin-bottom: 0.3rem;
-}
-.badge-imp { background: #00D9FF18; color: #00D9FF; border: 1px solid #00D9FF33; }
-.badge-exp { background: #FF4F7B18; color: #FF7B9A; border: 1px solid #FF4F7B33; }
-.badge-udn { background: #6C63FF18; color: #9D97FF; border: 1px solid #6C63FF33; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Paleta matplotlib ─────────────────────────────────────────────────────────
-C_CYAN    = "#00D9FF"
-C_VIOLET  = "#6C63FF"
-C_PINK    = "#FF4F7B"
-C_AMBER   = "#FFB547"
-C_GREEN   = "#34D399"
-BG        = "#0A0F1A"
-BG2       = "#0F1623"
-GRID      = "#1C2640"
-TXT       = "#4A5F80"
-TXT2      = "#8899BB"
-
-# ==============================
-# EXTRACCIÓN DE LAS 4 TABLAS
-# ==============================
-
-UBICACIONES = ["AICM", "AIFA", "GUADALAJARA", "MONTERREY", "TOLUCA", "QUERETARO"]
-
-FECHA_COLS_MAP = {
-    "Fecha Generación": "f_generacion",
-    "Fecha Llegada":    "f_llegada",
-    "Fecha Revalida":   "f_revalida",
-    "Fecha de Previo":  "f_previo",
-    "Fech Pago":        "f_pago",
-    "Fecha Despachos":  "f_despacho",
-    "Fecha Pase a Contabilidad": "f_contabilidad",
-    "Fecha de Facturación":      "f_facturacion",
-}
-
-COL_RENAME = {
-    "UDN": "aduana",
-    "# Importador": "importador_id",
-    "Nombre Importador": "importador_nombre",
-    "Cliente": "cliente",
-    "Ejecutivo": "ejecutivo",
-    "TO": "tipo_op",
-    "Referencia": "referencia",
-    "Pedimento": "pedimento",
-}
+C  = dict(cyan="#00D9FF", violet="#6C63FF", pink="#FF4F7B",
+          amber="#FFB547", green="#34D399", slate="#4A5F80")
+BG = "#0A0F1A"; GRID = "#1C2640"; TXT = "#4A5F80"; TXT2 = "#8899BB"
+CLRS5 = [C["cyan"], C["violet"], C["pink"], C["amber"], C["green"]]
+CLRS8 = CLRS5 + ["#FF6B6B", "#4ECDC4", "#45B7D1"]
 
 
-def _leer_resumen(df_raw, header_row, next_row=None):
-    """Lee una tabla de resumen y devuelve DataFrame con Ejecutivo + Operaciones + UDNs."""
-    hdr = df_raw.iloc[header_row]
-    col_ini = hdr.first_valid_index()
-    fin = next_row if next_row is not None else len(df_raw)
-    bloque = df_raw.loc[header_row: fin - 1, col_ini:].copy()
-    encabezados = bloque.iloc[0].astype(str).str.strip().tolist()
-    encabezados[0] = "Ejecutivo"
-    bloque = bloque.iloc[1:].copy()
-    bloque.columns = range(len(encabezados))
-    bloque = bloque.rename(columns={i: encabezados[i] for i in range(len(encabezados))})
-    bloque = bloque.loc[:, ~bloque.columns.duplicated()]
-    bloque = bloque[bloque["Ejecutivo"].notna()]
-    bloque = bloque[~bloque["Ejecutivo"].astype(str).str.upper().isin(["TOTAL", "NAN", ""])]
-    bloque = bloque.dropna(how="all")
-    cols_ubi = [c for c in bloque.columns if str(c).upper() in UBICACIONES]
-    for col in cols_ubi:
-        bloque[col] = pd.to_numeric(bloque[col], errors="coerce").fillna(0)
-    if "TOTAL" in bloque.columns:
-        bloque["Operaciones"] = pd.to_numeric(bloque["TOTAL"], errors="coerce").fillna(
-            bloque[cols_ubi].sum(axis=1)
-        )
-    else:
-        bloque["Operaciones"] = bloque[cols_ubi].sum(axis=1)
-    bloque["Ejecutivo"] = bloque["Ejecutivo"].astype(str).str.strip()
-    cols_out = ["Ejecutivo", "Operaciones"] + cols_ubi
-    return bloque[[c for c in cols_out if c in bloque.columns]].reset_index(drop=True)
+# ══════════════════════════════════════════════════════════════════════════════
+# GRÁFICAS
+# ══════════════════════════════════════════════════════════════════════════════
 
-
-@st.cache_data(show_spinner=False)
-def load_file(path: str):
-    """
-    Devuelve (df_detalle, df_equipos, df_individual, df_exportacion).
-    df_detalle: tabla transaccional completa (filas de pedimentos).
-    Las otras tres: tablas de resumen.
-    """
-    raw = pd.read_excel(path, header=None, engine="openpyxl")
-
-    # ── Detectar filas de encabezado de tablas resumen ─────────────────────
-    mask_imp = raw.apply(
-        lambda r: r.astype(str).str.upper().str.contains(r"EJECUTIVO\s+IMPORTACION", regex=True).any(), axis=1
-    )
-    mask_exp = raw.apply(
-        lambda r: r.astype(str).str.upper().str.contains(r"EJECUTIVO\s+EXPORTACION", regex=True).any(), axis=1
-    )
-    rows_imp = raw[mask_imp].index.tolist()
-    rows_exp = raw[mask_exp].index.tolist()
-
-    if len(rows_imp) < 2 or len(rows_exp) < 1:
-        st.error("Estructura no reconocida: se necesitan ≥2 tablas IMPORTACION y ≥1 EXPORTACION.")
-        st.stop()
-
-    # ── Tabla detalle (pedimentos) ─────────────────────────────────────────
-    # Encabezado en fila 10 (índice fijo del reporte), datos hasta primer resumen
-    hdr_row = 10
-    fin_detalle = rows_imp[0]
-    bloque_det = raw.iloc[hdr_row: fin_detalle].copy()
-    bloque_det.columns = bloque_det.iloc[0].astype(str).str.strip()
-    bloque_det = bloque_det.iloc[1:].reset_index(drop=True).dropna(how="all")
-    bloque_det = bloque_det.rename(columns={**COL_RENAME, **FECHA_COLS_MAP})
-    for col in FECHA_COLS_MAP.values():
-        if col in bloque_det.columns:
-            bloque_det[col] = pd.to_datetime(bloque_det[col], errors="coerce")
-    # Lead times derivados
-    if {"f_llegada", "f_facturacion"} <= set(bloque_det.columns):
-        bloque_det["lt_total"] = (bloque_det["f_facturacion"] - bloque_det["f_llegada"]).dt.days
-    if {"f_llegada", "f_pago"} <= set(bloque_det.columns):
-        bloque_det["lt_llegada_pago"] = (bloque_det["f_pago"] - bloque_det["f_llegada"]).dt.days
-    if {"f_pago", "f_despacho"} <= set(bloque_det.columns):
-        bloque_det["lt_pago_despacho"] = (bloque_det["f_despacho"] - bloque_det["f_pago"]).dt.days
-    if {"f_despacho", "f_facturacion"} <= set(bloque_det.columns):
-        bloque_det["lt_despacho_factura"] = (bloque_det["f_facturacion"] - bloque_det["f_despacho"]).dt.days
-    # Columna mes
-    if "f_llegada" in bloque_det.columns:
-        bloque_det["mes"] = bloque_det["f_llegada"].dt.to_period("M").astype(str)
-
-    # ── Tablas resumen ─────────────────────────────────────────────────────
-    df_equipos    = _leer_resumen(raw, rows_imp[0], rows_imp[1])
-    df_individual = _leer_resumen(raw, rows_imp[1], rows_exp[0])
-    df_exportacion = _leer_resumen(raw, rows_exp[0])
-
-    return bloque_det, df_equipos, df_individual, df_exportacion
-
-
-# ==============================
-# HELPERS DE GRÁFICAS
-# ==============================
-
-def make_fig(w: Union[int, float] = 10, h: Union[int, float] = 4):
+def _ax(w: float = 9, h: float = 4):
     fig, ax = plt.subplots(figsize=(w, h))
-    fig.patch.set_facecolor(BG)
-    ax.set_facecolor(BG)
+    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
     ax.tick_params(colors=TXT2, labelsize=8)
-    ax.xaxis.label.set_color(TXT)
-    ax.yaxis.label.set_color(TXT)
-    for spine in ax.spines.values():
-        spine.set_edgecolor(GRID)
-    ax.yaxis.grid(True, color=GRID, linewidth=0.5, linestyle="--", alpha=0.7)
+    for sp in ax.spines.values(): sp.set_edgecolor(GRID)
+    ax.yaxis.grid(True, color=GRID, lw=.5, ls="--", alpha=.7)
     ax.set_axisbelow(True)
     return fig, ax
 
 
-def bar_h(series, title, color=C_CYAN, top_n=None, label_fmt="{:,.0f}"):
-    """Barras horizontales — ideal para nombres largos."""
-    if top_n:
-        series = series.head(top_n)
-    series = series.sort_values(ascending=True)
+def bar_h(series: pd.Series, title: str, color=None, top_n=None, fmt="{:,.0f}"):
+    color = color or C["cyan"]
+    if top_n: series = series.nlargest(top_n)
+    series = series.sort_values()
     n = len(series)
-    fig, ax = make_fig(w=9, h=max(3.5, n * 0.42))
-    colors = [color] * n
-    # Degradado sutil
-    alphas = np.linspace(0.55, 1.0, n)
-    bars = ax.barh(range(n), series.values, color=color, alpha=0.9, height=0.62, zorder=3)
-    for i, (bar, a) in enumerate(zip(bars, alphas)):
-        bar.set_alpha(a)
-    # Etiquetas
-    vmax = series.max() if series.max() > 0 else 1
-    for i, (bar, v) in enumerate(zip(bars, series.values)):
-        ax.text(v + vmax * 0.015, bar.get_y() + bar.get_height() / 2,
-                label_fmt.format(v), va="center", ha="left",
-                fontsize=7.5, color=TXT2, fontfamily="monospace")
-    ax.set_yticks(range(n))
-    ax.set_yticklabels(series.index, fontsize=8)
-    ax.set_xlabel("Operaciones", labelpad=6)
-    ax.set_xlim(0, vmax * 1.18)
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left", fontweight="500")
-    plt.tight_layout()
-    return fig
+    fig, ax = _ax(9, max(3, n * .42))
+    alphas = np.linspace(.5, 1.0, n)
+    vals = series.to_numpy()
+    bars = ax.barh(range(n), vals, color=color, height=.62, zorder=3)
+    for bar, a in zip(bars, alphas): bar.set_alpha(a)
+    vmax = series.max() or 1
+    for bar, v in zip(bars, vals):
+        ax.text(v + vmax * .015, bar.get_y() + bar.get_height() / 2,
+                fmt.format(v), va="center", ha="left", fontsize=7.5,
+                color=TXT2, fontfamily="monospace")
+    ax.set_yticks(range(n)); ax.set_yticklabels(series.index, fontsize=8)
+    ax.set_xlim(0, vmax * 1.2)
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    plt.tight_layout(); return fig
 
 
-def bar_v(series, title, color=C_CYAN, top_n=None):
-    """Barras verticales — para pocas categorías."""
-    if top_n:
-        series = series.head(top_n)
+def bar_v(series: pd.Series, title: str, color=None):
+    color = color or C["cyan"]
     n = len(series)
-    fig, ax = make_fig(w=max(7, n * 0.7), h=4.5)
-    alphas = np.linspace(0.6, 1.0, n)
-    bars = ax.bar(range(n), series.values, color=color, width=0.6, zorder=3, edgecolor="none")
-    for bar, a in zip(bars, alphas):
-        bar.set_alpha(a)
-    vmax = series.max() if series.max() > 0 else 1
+    fig, ax = _ax(max(5, n * .75), 4.5)
+    bars = ax.bar(range(n), series.to_numpy(), color=color, width=.6, zorder=3, alpha=.9)
+    vmax = series.max() or 1
     for bar in bars:
         h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + vmax * 0.02,
-                f"{int(h):,}", ha="center", va="bottom",
-                fontsize=7.5, color=TXT2, fontfamily="monospace")
-    ax.set_xticks(range(n))
-    ax.set_xticklabels(series.index, rotation=38, ha="right", fontsize=8)
-    ax.set_ylim(0, vmax * 1.18)
-    ax.set_ylabel("Operaciones", labelpad=6)
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left", fontweight="500")
-    plt.tight_layout()
-    return fig
+        ax.text(bar.get_x() + bar.get_width() / 2, h + vmax * .02,
+                f"{h:,.0f}", ha="center", va="bottom", fontsize=7.5,
+                color=TXT2, fontfamily="monospace")
+    ax.set_xticks(range(n)); ax.set_xticklabels(series.index, rotation=38, ha="right", fontsize=8)
+    ax.set_ylim(0, vmax * 1.2)
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    plt.tight_layout(); return fig
 
 
-def multi_bar(df_pivot, title, colors=None):
-    """Barras agrupadas: df_pivot index=categorías, columnas=series."""
-    if colors is None:
-        colors = [C_CYAN, C_VIOLET, C_PINK]
-    n_cats = len(df_pivot)
-    n_ser  = len(df_pivot.columns)
-    width  = 0.7 / n_ser
-    fig, ax = make_fig(w=max(7, n_cats * 0.8), h=4.5)
+def multi_bar(df_pivot: pd.DataFrame, title: str, colors=None, rot=38):
+    colors = colors or CLRS5
+    n_cats, n_ser = len(df_pivot), len(df_pivot.columns)
+    w = 0.7 / n_ser
+    fig, ax = _ax(max(6, n_cats * .8), 4.5)
     xs = np.arange(n_cats)
     for i, (col, clr) in enumerate(zip(df_pivot.columns, colors)):
-        offset = (i - n_ser / 2 + 0.5) * width
-        bars = ax.bar(xs + offset, df_pivot[col].values,
-                      width=width * 0.9, color=clr, label=str(col), zorder=3, alpha=0.9)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(df_pivot.index, rotation=38, ha="right", fontsize=8)
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left")
-    ax.legend(fontsize=7.5, framealpha=0, labelcolor=TXT2,
-              loc="upper right", ncol=n_ser)
-    plt.tight_layout()
-    return fig
+        offset = (i - n_ser / 2 + .5) * w
+        ax.bar(xs + offset, df_pivot[col].to_numpy(), width=w * .9,
+               color=clr, label=str(col), zorder=3, alpha=.9)
+    ax.set_xticks(xs); ax.set_xticklabels(df_pivot.index, rotation=rot, ha="right", fontsize=8)
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    ax.legend(fontsize=7.5, framealpha=0, labelcolor=TXT2, ncol=n_ser)
+    plt.tight_layout(); return fig
 
 
 def donut(sizes, labels, colors, title):
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
-    fig.patch.set_facecolor(BG)
-    ax.set_facecolor(BG)
-    wedges, texts, autotexts = ax.pie(
-        sizes, labels=None, colors=colors,
-        autopct=lambda p: f"{p:.1f}%" if p > 3 else "",
-        startangle=90, pctdistance=0.78,
-        wedgeprops={"width": 0.52, "edgecolor": BG, "linewidth": 2},
-    )
-    for at in autotexts:
-        at.set(color="#C9D4E8", fontsize=7.5, fontfamily="monospace")
-    # Centro
-    ax.text(0, 0, f"{sum(sizes):,}", ha="center", va="center",
-            fontsize=16, color="#E8F0FF", fontfamily="monospace", fontweight="bold")
+    fig, ax = plt.subplots(figsize=(4, 4))
+    fig.patch.set_facecolor(BG); ax.set_facecolor(BG)
+    result = ax.pie(sizes, colors=colors,
+        autopct=lambda p: f"{p:.1f}%" if p > 4 else "",
+        startangle=90, pctdistance=.78,
+        wedgeprops={"width": .52, "edgecolor": BG, "linewidth": 2})
+    wedges = result[0]
+    ats = result[2] if len(result) > 2 else result[1]
+    for at in ats: at.set(color="#C9D4E8", fontsize=7.5, fontfamily="monospace")
+    total = sum(sizes)
+    ax.text(0, 0, f"{total:,}", ha="center", va="center",
+            fontsize=14, color="#E8F0FF", fontfamily="monospace", fontweight="bold")
     ax.set_title(title, color="#C9D4E8", fontsize=8.5,
-                 fontfamily="monospace", pad=10, loc="center")
+                 fontfamily="monospace", pad=6, loc="center")
     patches = [mpatches.Patch(facecolor=c, label=l) for c, l in zip(colors, labels)]
-    ax.legend(handles=patches, fontsize=7.5, framealpha=0, labelcolor=TXT2,
-              loc="lower center", ncol=len(labels), bbox_to_anchor=(0.5, -0.05))
-    plt.tight_layout()
-    return fig
+    ax.legend(handles=patches, fontsize=7, framealpha=0, labelcolor=TXT2,
+              loc="lower center", ncol=3, bbox_to_anchor=(.5, -.06))
+    plt.tight_layout(); return fig
 
 
-def timeline_ops(df, title):
-    """Operaciones por mes, apiladas por tipo."""
-    if "mes" not in df.columns or "tipo_op" not in df.columns:
-        return None
-    pivot = (
-        df.groupby(["mes", "tipo_op"]).size().unstack(fill_value=0)
-        .sort_index()
-    )
-    cols_order = [c for c in ["Importación", "Exportación"] if c in pivot.columns]
-    pivot = pivot[cols_order]
-    meses = pivot.index.tolist()
-    n = len(meses)
-    fig, ax = make_fig(w=max(7, n * 1.1), h=4)
-    bottom = np.zeros(n)
-    clrs = [C_CYAN, C_PINK]
-    for col, clr in zip(pivot.columns, clrs):
-        vals = pivot[col].values.astype(float)
-        ax.bar(range(n), vals, bottom=bottom, color=clr, width=0.6,
-               alpha=0.88, zorder=3, label=col)
-        bottom += vals
-    ax.set_xticks(range(n))
-    ax.set_xticklabels(meses, rotation=30, ha="right", fontsize=8)
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left")
-    ax.legend(fontsize=7.5, framealpha=0, labelcolor=TXT2, loc="upper left")
-    plt.tight_layout()
-    return fig
-
-
-def scatter_lt(df, title):
-    """Scatter: ejecutivo vs lead time, tamaño = número de ops."""
-    if "lt_total" not in df.columns or "ejecutivo" not in df.columns:
-        return None
-    g = (
-        df.dropna(subset=["lt_total", "ejecutivo"])
-        .groupby("ejecutivo")["lt_total"]
-        .agg(prom="mean", ops="count")
-        .reset_index()
-    )
-    fig, ax = make_fig(w=9, h=5)
-    sc = ax.scatter(g["prom"], g.index, s=g["ops"] * 12,
-                    c=g["prom"], cmap="cool", alpha=0.85, zorder=3,
-                    vmin=g["prom"].min(), vmax=g["prom"].max())
-    ax.set_yticks(range(len(g)))
-    ax.set_yticklabels(g["ejecutivo"], fontsize=7.5)
-    ax.set_xlabel("Lead Time Promedio (días)", labelpad=6)
-    # Línea de promedio global
-    prom_global = g["prom"].mean()
-    ax.axvline(prom_global, color=C_AMBER, linewidth=1, linestyle="--", alpha=0.7)
-    ax.text(prom_global + 0.3, len(g) - 0.5, f"  prom global: {prom_global:.1f}d",
-            color=C_AMBER, fontsize=7.5, fontfamily="monospace", va="top")
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left")
-    # Leyenda tamaño
-    for ops_val in [10, 30, 60]:
-        ax.scatter([], [], s=ops_val * 12, c=TXT, alpha=0.6,
-                   label=f"{ops_val} ops")
-    ax.legend(fontsize=7, framealpha=0, labelcolor=TXT2,
-              loc="lower right", title="# ops", title_fontsize=6.5)
-    plt.tight_layout()
-    return fig
-
-
-def heatmap_eje_udn(df, title):
-    """Heatmap ejecutivo × aduana."""
-    if "ejecutivo" not in df.columns or "aduana" not in df.columns:
-        return None
-    pivot = df.groupby(["ejecutivo", "aduana"]).size().unstack(fill_value=0)
-    fig, ax = make_fig(w=max(6, len(pivot.columns) * 1.5), h=max(4, len(pivot) * 0.45))
-    im = ax.imshow(pivot.values, cmap="Blues", aspect="auto",
-                   vmin=0, vmax=pivot.values.max())
-    ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns, fontsize=8.5)
-    ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels(pivot.index, fontsize=7.5)
-    for i in range(len(pivot.index)):
-        for j in range(len(pivot.columns)):
-            v = pivot.values[i, j]
+def heatmap(df_pivot: pd.DataFrame, title: str, fmt_int: bool = True):
+    fig, ax = _ax(max(5, len(df_pivot.columns) * 1.5),
+                  max(3.5, len(df_pivot) * .45))
+    df_array = df_pivot.to_numpy().astype(float)
+    im = ax.imshow(df_array, cmap="Blues", aspect="auto", vmin=0)
+    ax.set_xticks(range(len(df_pivot.columns)))
+    ax.set_xticklabels(df_pivot.columns, fontsize=8, rotation=30, ha="right")
+    ax.set_yticks(range(len(df_pivot.index)))
+    ax.set_yticklabels(df_pivot.index, fontsize=7.5)
+    vmax = float(df_array.max()) or 1
+    for i in range(len(df_pivot.index)):
+        for j in range(len(df_pivot.columns)):
+            v = float(df_array[i, j])
             if v > 0:
-                ax.text(j, i, str(int(v)), ha="center", va="center",
-                        fontsize=7.5, color="#E8F0FF" if v > pivot.values.max() * 0.5 else TXT2,
-                        fontfamily="monospace")
-    ax.set_title(title, color="#C9D4E8", fontsize=9.5,
-                 fontfamily="monospace", pad=10, loc="left")
-    plt.colorbar(im, ax=ax, fraction=0.03, pad=0.03).ax.tick_params(colors=TXT2, labelsize=7)
-    plt.tight_layout()
-    return fig
+                clr = "#E8F0FF" if v > vmax * .5 else TXT2
+                lbl = str(int(v)) if fmt_int else f"{v:.1f}"
+                ax.text(j, i, lbl, ha="center", va="center",
+                        fontsize=7.5, color=clr, fontfamily="monospace")
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    plt.colorbar(im, ax=ax, fraction=.03, pad=.03).ax.tick_params(colors=TXT2, labelsize=7)
+    plt.tight_layout(); return fig
 
 
-# ==============================
+def sla_bar(df_res: pd.DataFrame, title: str):
+    """Barra horizontal % cumplimiento SLA por etapa."""
+    n = len(df_res)
+    fig, ax = _ax(10, max(3, n * .55))
+    for idx, (_, row) in enumerate(df_res.iterrows()):
+        pct  = row["% Cumple"]
+        clr  = C["green"] if pct >= 90 else C["amber"] if pct >= 70 else C["pink"]
+        ax.barh(idx, pct, color=clr, height=.55, zorder=3, alpha=.85)
+        ax.barh(idx, 100, color=GRID, height=.55, zorder=2, alpha=.4)
+        ax.text(pct + 1, idx, f"{pct:.1f}%", va="center", fontsize=8,
+                color=TXT2, fontfamily="monospace")
+        ax.text(-1, idx, row["Etapa"], va="center", ha="right", fontsize=8, color=TXT2)
+    ax.set_xlim(0, 115); ax.set_yticks([])
+    ax.axvline(90, color=C["green"], lw=1, ls="--", alpha=.5)
+    ax.axvline(70, color=C["amber"], lw=1, ls="--", alpha=.5)
+    ax.set_xlabel("% Cumplimiento SLA", color=TXT)
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    plt.tight_layout(); return fig
+
+
+def flujo_apoyo(pivot_apoyo: pd.DataFrame):
+    """Heatmap de flujo: quién apoyó a quién (jefe_ejecutivo × jefe_cliente)."""
+    if pivot_apoyo.empty:
+        return None
+    pv = pivot_apoyo.pivot_table(
+        index="jefe_ejecutivo", columns="jefe_cliente",
+        values="ops_apoyo", aggfunc="sum", fill_value=0)
+    return heatmap(pv, "FLUJO DE APOYO: QUIÉN APOYÓ A QUIÉN\n(filas=equipo que apoyó, cols=equipo que recibió)")
+
+
+def line_trend(df_pivot: pd.DataFrame, title: str, colors=None):
+    colors = colors or [C["cyan"], C["pink"]]
+    meses = df_pivot.index.tolist()
+    fig, ax = _ax(max(7, len(meses) * 1.1), 4)
+    for col, clr in zip(df_pivot.columns, colors):
+        vals = df_pivot[col].to_numpy(dtype=float)
+        ax.plot(range(len(meses)), vals, color=clr, lw=2, label=str(col), zorder=3)
+        ax.fill_between(range(len(meses)), vals, alpha=.1, color=clr)
+        ax.scatter(range(len(meses)), vals, color=clr, s=35, zorder=4)
+    ax.set_xticks(range(len(meses)))
+    ax.set_xticklabels(meses, rotation=30, ha="right", fontsize=8)
+    ax.set_title(title, color="#C9D4E8", fontsize=9, fontfamily="monospace", pad=8, loc="left")
+    ax.legend(fontsize=7.5, framealpha=0, labelcolor=TXT2)
+    plt.tight_layout(); return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
-# ==============================
-
-files = [f for f in os.listdir(DATA_FOLDER) if f.endswith(".xlsx")]
-if not files:
-    st.error("No hay archivos `.xlsx` en la carpeta `data/`.")
-    st.stop()
-
+# ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("<div style='font-family:DM Mono,monospace;font-size:0.7rem;letter-spacing:0.2em;color:#4A5F80;text-transform:uppercase;margin-bottom:1rem'>⬡ OPS CE</div>", unsafe_allow_html=True)
-    selected_file = st.selectbox("Archivo", files, label_visibility="visible")
+    st.markdown("<p style='font-family:DM Mono,monospace;font-size:.7rem;"
+                "letter-spacing:.2em;color:#4A5F80;text-transform:uppercase'>⬡ OPS · CE</p>",
+                unsafe_allow_html=True)
+
+    st.markdown("**Subir reporte**")
+    uploaded = st.file_uploader("Excel mensual", type=["xlsx"], label_visibility="collapsed")
+    if uploaded:
+        with st.spinner("Procesando…"):
+            try:
+                parsed = core.parse_excel(uploaded.read())
+                is_new, msg = core.add_periodo(parsed)
+                st.success(msg) if is_new else st.warning(msg)
+                if is_new: st.cache_data.clear()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
     st.divider()
 
-file_path = os.path.join(DATA_FOLDER, selected_file)
-
-with st.spinner("Cargando…"):
-    try:
-        df_det, df_eq, df_ind, df_exp = load_file(file_path)
-    except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+    periodos = core.get_periodos()
+    if not periodos:
+        st.info("Sube un archivo Excel para comenzar.")
         st.stop()
 
-# ── Filtros ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("**Filtros**")
-
-    opts_udn = ["Todas"] + sorted(df_det["aduana"].dropna().astype(str).unique().tolist()) if "aduana" in df_det.columns else ["Todas"]
-    filtro_udn = st.selectbox("Aduana / UDN", opts_udn)
-
-    opts_tipo = ["Todos"] + sorted(df_det["tipo_op"].dropna().astype(str).unique().tolist()) if "tipo_op" in df_det.columns else ["Todos"]
-    filtro_tipo = st.selectbox("Tipo de operación", opts_tipo)
-
-    opts_eje = ["Todos"] + sorted(df_det["ejecutivo"].dropna().astype(str).unique().tolist()) if "ejecutivo" in df_det.columns else ["Todos"]
-    filtro_eje = st.selectbox("Ejecutivo", opts_eje)
-
-    if "mes" in df_det.columns:
-        meses_disp = sorted(df_det["mes"].dropna().unique().tolist())
-        filtro_mes = st.multiselect("Mes(es)", meses_disp, default=meses_disp)
-    else:
-        filtro_mes = []
+    st.markdown("**Periodo(s)**")
+    sel_periodos = st.multiselect("Periodos", periodos, default=periodos,
+                                   label_visibility="collapsed")
+    if not sel_periodos:
+        st.warning("Selecciona al menos un periodo.")
+        st.stop()
 
     st.divider()
-    st.caption(f"v2.0 · {len(df_det):,} pedimentos")
 
-# ── Aplicar filtros ──────────────────────────────────────────────────────────
-dff = df_det.copy()
-if filtro_udn != "Todas" and "aduana" in dff.columns:
-    dff = dff[dff["aduana"].astype(str) == filtro_udn]
-if filtro_tipo != "Todos" and "tipo_op" in dff.columns:
-    dff = dff[dff["tipo_op"].astype(str) == filtro_tipo]
-if filtro_eje != "Todos" and "ejecutivo" in dff.columns:
-    dff = dff[dff["ejecutivo"].astype(str) == filtro_eje]
-if filtro_mes and "mes" in dff.columns:
-    dff = dff[dff["mes"].isin(filtro_mes)]
+    # Cargar datos
+    det_full = core.get_detalle()
+    det = det_full[det_full["periodo"].isin(sel_periodos)].copy() \
+          if "periodo" in det_full.columns else det_full.copy()
 
-# ==============================
-# ENCABEZADO
-# ==============================
+    equipos_cfg    = core.load_equipos()
+    clientes_jefe  = core.load_clientes_jefe()
+    feriados_extra = core.load_feriados_extra()
+    feriados       = SLA.get_feriados(feriados_extra)
 
+    st.markdown("**Filtros**")
+
+    jefes = ["Todos"] + sorted(equipos_cfg.keys())
+    sel_jefe = st.selectbox("Jefe de equipo", jefes)
+    miembros_disp: list[str] | None = None
+    if sel_jefe != "Todos":
+        miembros = core.get_ejecutivos_de_jefe(sel_jefe, equipos_cfg)
+        miembros_disp = st.multiselect("Integrantes", miembros, default=miembros)
+
+    sel_area = st.selectbox("Área", ["Todas", "Importación", "Exportación"])
+
+    udns = sorted(det["aduana"].dropna().astype(str).unique()) \
+           if "aduana" in det.columns else []
+    sel_udn = st.multiselect("Aduana", udns, default=udns)
+
+    clientes_lista = sorted(det["cliente"].dropna().astype(str).unique()) \
+                     if "cliente" in det.columns else []
+    sel_cliente = st.multiselect("Cliente", clientes_lista, default=clientes_lista)
+
+    st.divider()
+
+    # Selector de etapas para SLA
+    st.markdown("**Etapas a analizar**")
+    etapas_labels = {e["id"]: e["label"] for e in SLA.ETAPAS}
+    sel_etapas = st.multiselect("Etapas", list(etapas_labels.keys()),
+                                 default=list(etapas_labels.keys()),
+                                 format_func=lambda x: etapas_labels[x],
+                                 label_visibility="collapsed")
+
+    st.divider()
+
+    with st.expander("🗑 Gestionar histórico"):
+        per_del = st.selectbox("Eliminar periodo", ["—"] + periodos)
+        if st.button("Eliminar", type="secondary") and per_del != "—":
+            st.success(core.delete_periodo(per_del))
+            st.cache_data.clear()
+            st.rerun()
+
+    st.caption(f"Histórico: {len(periodos)} periodo(s) · {len(det_full):,} pedimentos")
+    st.caption(f"Backend: **{core._backend()}**")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# APLICAR FILTROS
+# ══════════════════════════════════════════════════════════════════════════════
+dff = det.copy()
+
+if miembros_disp and "ejecutivo" in dff.columns:
+    def _match(n, members=miembros_disp):  # type: ignore[arg-type]
+        n = str(n).upper()
+        return any(m.upper() in n or n in m.upper() for m in members)
+    dff = dff[dff["ejecutivo"].apply(_match)]
+
+if sel_area != "Todas" and "tipo_op" in dff.columns:
+    kw = "import" if sel_area == "Importación" else "export"
+    dff = dff[dff["tipo_op"].astype(str).str.lower().str.contains(kw, na=False)]
+
+if sel_udn and "aduana" in dff.columns:
+    dff = dff[dff["aduana"].astype(str).isin(sel_udn)]
+
+if sel_cliente and "cliente" in dff.columns:
+    dff = dff[dff["cliente"].astype(str).isin(sel_cliente)]
+
+# Calcular SLA días hábiles
+dff_sla = SLA.calcular_sla(dff, feriados, etapas_activas=sel_etapas)
+
+# Enriquecer con lógica de apoyo
+dff_sla = CLI.enriquecer_apoyo(dff_sla, equipos_cfg, clientes_jefe)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER + KPIs
+# ══════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="top-bar"></div>', unsafe_allow_html=True)
-st.markdown("# OPS · COMERCIO EXTERIOR")
-st.caption(f"Archivo: `{selected_file}` · {len(dff):,} de {len(df_det):,} pedimentos")
+st.markdown("# DASHBOARD · OPERACIONES CE")
 
-# Badges UDN
-if "aduana" in df_det.columns:
-    udns = df_det["aduana"].dropna().unique().tolist()
-    badges = "".join(f'<span class="badge badge-udn">{u}</span>' for u in sorted(udns))
-    st.markdown(badges, unsafe_allow_html=True)
+col_info, col_badges = st.columns([2, 3])
+with col_info:
+    st.caption(f"{len(dff_sla):,} pedimentos · {', '.join(sorted(sel_periodos))}")
+with col_badges:
+    badges = ""
+    if sel_jefe != "Todos":
+        badges += f'<span class="badge udn">👤 {sel_jefe}</span>'
+    if sel_area != "Todas":
+        badges += f'<span class="badge {"imp" if sel_area == "Importación" else "exp"}">{sel_area}</span>'
+    for u in sel_udn: badges += f'<span class="badge udn">{u}</span>'
+    if badges: st.markdown(badges, unsafe_allow_html=True)
 
 st.divider()
 
-# ==============================
+if dff_sla.empty:
+    st.warning("Sin datos para la selección.")
+    st.stop()
+
 # KPIs
-# ==============================
+imp_n  = dff_sla["tipo_op"].astype(str).str.lower().str.contains("import", na=False).sum() \
+          if "tipo_op" in dff_sla.columns else 0
+exp_n  = dff_sla["tipo_op"].astype(str).str.lower().str.contains("export", na=False).sum() \
+          if "tipo_op" in dff_sla.columns else 0
+n_eje  = dff_sla["ejecutivo"].nunique() if "ejecutivo" in dff_sla.columns else 0
+n_cli  = dff_sla["cliente"].nunique()    if "cliente"   in dff_sla.columns else 0
 
-imp_mask = dff["tipo_op"].astype(str).str.lower().str.contains("import", na=False) if "tipo_op" in dff.columns else pd.Series(False, index=dff.index)
-exp_mask = dff["tipo_op"].astype(str).str.lower().str.contains("export", na=False) if "tipo_op" in dff.columns else pd.Series(False, index=dff.index)
-n_eje = dff["ejecutivo"].nunique() if "ejecutivo" in dff.columns else 0
-n_clientes = dff["cliente"].nunique() if "cliente" in dff.columns else 0
-lt_prom = round(dff["lt_total"].median(), 1) if "lt_total" in dff.columns else "N/A"
-lt_max  = int(dff["lt_total"].max()) if "lt_total" in dff.columns and dff["lt_total"].notna().any() else "N/A"
+# SLA total operativo (desde pago)
+dh_op  = dff_sla["dh_total_op"].dropna() if "dh_total_op" in dff_sla.columns else pd.Series()
+lt_med = f"{dh_op.median():.1f}dh" if not dh_op.empty else "N/A"
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Total Ops",        f"{len(dff):,}")
-c2.metric("Importaciones",    f"{imp_mask.sum():,}")
-c3.metric("Exportaciones",    f"{exp_mask.sum():,}")
-c4.metric("Ejecutivos",       f"{n_eje:,}")
-c5.metric("Clientes únicos",  f"{n_clientes:,}")
-c6.metric("Lead Time Mediano", f"{lt_prom}d" if lt_prom != "N/A" else "N/A")
+# % cumplimiento global (etapas seleccionadas)
+venc_cols = [f"vencido_{e}" for e in sel_etapas if f"vencido_{e}" in dff_sla.columns]
+pct_cumple = "N/A"
+if venc_cols:
+    any_venc = dff_sla[venc_cols].any(axis=1).sum()
+    pct_cumple = f"{100 - any_venc / len(dff_sla) * 100:.1f}%"
+
+apoyo_n = int(dff_sla["es_apoyo"].sum()) if "es_apoyo" in dff_sla.columns else 0
+
+k1,k2,k3,k4,k5,k6,k7 = st.columns(7)
+k1.metric("Total Ops",      f"{len(dff_sla):,}")
+k2.metric("Importaciones",  f"{imp_n:,}")
+k3.metric("Exportaciones",  f"{exp_n:,}")
+k4.metric("Ejecutivos",     f"{n_eje}")
+k5.metric("Clientes",       f"{n_cli}")
+k6.metric("LT Operativo",   lt_med)
+k7.metric("% SLA Global",   pct_cumple)
 
 st.divider()
 
-# ==============================
-# PESTAÑAS
-# ==============================
 
-tab_eq, tab_ind, tab_exp, tab_lt, tab_heat, tab_trend, tab_raw = st.tabs([
-    "EQUIPOS", "INDIVIDUAL", "EXPORTACIÓN", "LEAD TIME", "HEATMAP", "TENDENCIA", "RAW DATA"
+# ══════════════════════════════════════════════════════════════════════════════
+# PESTAÑAS
+# ══════════════════════════════════════════════════════════════════════════════
+tabs = st.tabs([
+    "EQUIPOS", "EJECUTIVOS", "SLA · TIEMPOS",
+    "APOYO ENTRE EQUIPOS", "EXPORTACIÓN",
+    "HEATMAP", "TENDENCIA",
+    "CONFIG EQUIPOS", "CONFIG CLIENTES", "CONFIG FERIADOS",
+    "RAW DATA"
 ])
+(tab_eq, tab_eje, tab_sla, tab_apoyo, tab_exp,
+ tab_heat, tab_trend, tab_cfg_eq, tab_cfg_cli,
+ tab_cfg_fer, tab_raw) = tabs
+
 
 # ── EQUIPOS ──────────────────────────────────────────────────────────────────
 with tab_eq:
-    st.subheader("Operaciones por Jefe de Equipo — Importación")
-    st.caption("Suma acumulada incluyendo a toda la gente a cargo.")
+    st.subheader("Operaciones por Jefe de Equipo")
 
-    if not df_eq.empty:
-        col_l, col_r = st.columns([3, 1])
-        with col_l:
-            serie = df_eq.set_index("Ejecutivo")["Operaciones"].sort_values(ascending=False)
-            st.pyplot(bar_h(serie, "TOTAL OPERACIONES POR EQUIPO", color=C_CYAN))
-        with col_r:
-            # Mini donut por UDN si hay cols de ubicación
-            ubi_cols = [c for c in df_eq.columns if c in UBICACIONES and df_eq[c].sum() > 0]
-            if ubi_cols:
-                sizes = [df_eq[c].sum() for c in ubi_cols]
-                clrs  = [C_CYAN, C_VIOLET, C_PINK, C_AMBER, C_GREEN][:len(ubi_cols)]
-                st.pyplot(donut(sizes, ubi_cols, clrs, "DIST. POR ADUANA"))
-        st.dataframe(
-            df_eq.sort_values("Operaciones", ascending=False).reset_index(drop=True),
-            use_container_width=True, hide_index=True
-        )
+    def _ops_jefe(df, jefe, cfg):
+        mbs = cfg.get(jefe, [jefe])
+        def _m(n, mbs=mbs):
+            n = str(n).upper()
+            return any(m.upper() in n or n in m.upper() for m in mbs)
+        return df[df["ejecutivo"].apply(_m)] if "ejecutivo" in df.columns else pd.DataFrame()
+
+    ops_jefes = {j: len(_ops_jefe(dff_sla, j, equipos_cfg)) for j in equipos_cfg}
+    ops_jefes = {k: v for k, v in ops_jefes.items() if v > 0}
+
+    if not ops_jefes:
+        st.info("Sin datos. Configura los equipos en la pestaña CONFIG EQUIPOS.")
     else:
-        st.info("Sin datos de equipos.")
+        c_l, c_r = st.columns([3, 1])
+        with c_l:
+            st.pyplot(bar_h(pd.Series(ops_jefes).sort_values(),
+                            "OPS TOTALES POR JEFE DE EQUIPO", C["cyan"]))
+        with c_r:
+            udn_d = dff_sla.groupby("aduana").size() if "aduana" in dff_sla.columns else pd.Series()
+            if not udn_d.empty:
+                st.pyplot(donut(udn_d.values.tolist(), udn_d.index.tolist(),
+                                CLRS5[:len(udn_d)], "POR ADUANA"))
 
-# ── INDIVIDUAL ───────────────────────────────────────────────────────────────
-with tab_ind:
-    st.subheader("Operaciones Individuales por Ejecutivo")
-    st.caption("Pedimentos asignados directamente, desglosados por aduana.")
+        # Tabla jefe × aduana × tipo_op
+        filas = []
+        for jefe in ops_jefes:
+            sub = _ops_jefe(dff_sla, jefe, equipos_cfg)
+            for (per, adn, tp), g in sub.groupby(["periodo", "aduana", "tipo_op"]):
+                filas.append({"Jefe": jefe, "Periodo": per,
+                              "Aduana": adn, "Tipo": tp, "Ops": len(g)})
+        if filas:
+            df_t = pd.DataFrame(filas).sort_values(["Jefe", "Aduana"])
+            st.dataframe(df_t, use_container_width=True, hide_index=True)
 
-    if not df_ind.empty:
-        col_l, col_r = st.columns([3, 1])
-        with col_l:
-            serie = df_ind.set_index("Ejecutivo")["Operaciones"].sort_values(ascending=False)
-            st.pyplot(bar_h(serie, "TOTAL OPS INDIVIDUALES", color=C_VIOLET))
-        with col_r:
-            ubi_cols = [c for c in df_ind.columns if c in UBICACIONES and df_ind[c].sum() > 0]
-            if ubi_cols:
-                sizes = [df_ind[c].sum() for c in ubi_cols]
-                clrs  = [C_CYAN, C_VIOLET, C_PINK, C_AMBER][:len(ubi_cols)]
-                st.pyplot(donut(sizes, ubi_cols, clrs, "DIST. POR ADUANA"))
 
-        # Comparativa equipo vs individual (si coinciden nombres)
-        eje_comunes = set(df_eq["Ejecutivo"]) & set(df_ind["Ejecutivo"])
-        if eje_comunes:
-            st.markdown("#### Comparativa equipo vs. individual")
-            comp = df_eq.set_index("Ejecutivo")[["Operaciones"]].rename(columns={"Operaciones": "Equipo"}).join(
-                df_ind.set_index("Ejecutivo")[["Operaciones"]].rename(columns={"Operaciones": "Individual"}),
-                how="inner"
+# ── EJECUTIVOS ────────────────────────────────────────────────────────────────
+with tab_eje:
+    st.subheader("Operaciones por Ejecutivo")
+    ops_eje = dff_sla.groupby("ejecutivo").size().sort_values(ascending=False) \
+              if "ejecutivo" in dff_sla.columns else pd.Series()
+
+    if ops_eje.empty:
+        st.info("Sin datos.")
+    else:
+        c_l, c_r = st.columns([3, 1])
+        with c_l:
+            st.pyplot(bar_h(ops_eje, "OPS POR EJECUTIVO", C["violet"]))
+        with c_r:
+            if imp_n + exp_n > 0:
+                st.pyplot(donut([imp_n, exp_n], ["Importación", "Exportación"],
+                                [C["cyan"], C["pink"]], "IMP vs EXP"))
+
+        # Tabla ejecutivo vs equipo con SLA
+        st.markdown("#### Detalle ejecutivo · equipo · SLA")
+        filas = []
+        for jefe, mbs in equipos_cfg.items():
+            ops_eq_total = len(_ops_jefe(dff_sla, jefe, equipos_cfg))
+            for mb in mbs:
+                def _mb(n, m=mb):
+                    n = str(n).upper(); m = m.upper()
+                    return m in n or n in m
+                sub_mb = dff_sla[dff_sla["ejecutivo"].apply(_mb)] \
+                         if "ejecutivo" in dff_sla.columns else pd.DataFrame()
+                if sub_mb.empty: continue
+                venc_mb = 0
+                if venc_cols:
+                    venc_mb = sub_mb[venc_cols].any(axis=1).sum()
+                dh_mb = sub_mb["dh_total_op"].dropna() if "dh_total_op" in sub_mb.columns else pd.Series()
+                filas.append({
+                    "Jefe": jefe, "Ejecutivo": mb,
+                    "Ops propias": len(sub_mb),
+                    "Total equipo": ops_eq_total,
+                    "LT med (dh)": round(dh_mb.median(), 1) if not dh_mb.empty else None,
+                    "Vencidos SLA": int(venc_mb),
+                    "% SLA ok": round((len(sub_mb) - venc_mb) / len(sub_mb) * 100, 1) if sub_mb.shape[0] else 0,
+                })
+        if filas:
+            st.dataframe(pd.DataFrame(filas).sort_values(["Jefe", "Ops propias"], ascending=[True, False]),
+                         use_container_width=True, hide_index=True)
+
+
+# ── SLA · TIEMPOS ─────────────────────────────────────────────────────────────
+with tab_sla:
+    st.subheader("Cumplimiento SLA por Etapa · Días Hábiles")
+    st.caption("🟢 ≥90%  🟡 70-90%  🔴 <70%  · Feriados México incluidos")
+
+    df_res = SLA.resumen_sla(dff_sla)
+    if df_res.empty:
+        st.info("Selecciona al menos una etapa en el sidebar.")
+    else:
+        c_l, c_r = st.columns([2, 3])
+        with c_l:
+            # Colorear tabla
+            def _color_pct(val):
+                if isinstance(val, (int, float)):
+                    if val >= 90: return "color:#34D399"
+                    if val >= 70: return "color:#FFB547"
+                    return "color:#FF7B9A"
+                return ""
+            st.dataframe(
+                df_res.style.map(_color_pct, subset=["% Cumple"]),
+                use_container_width=True, hide_index=True
             )
-            comp["Equipo restante"] = comp["Equipo"] - comp["Individual"]
-            pivot_comp = comp[["Individual", "Equipo restante"]].sort_values("Individual", ascending=False)
-            st.pyplot(multi_bar(pivot_comp, "OPS PROPIAS vs. RESTO DEL EQUIPO",
-                                colors=[C_VIOLET, C_CYAN]))
+        with c_r:
+            st.pyplot(sla_bar(df_res, "% CUMPLIMIENTO SLA POR ETAPA"))
 
-        st.dataframe(
-            df_ind.sort_values("Operaciones", ascending=False).reset_index(drop=True),
-            use_container_width=True, hide_index=True
-        )
+        st.divider()
+        st.markdown("#### SLA por ejecutivo (etapa seleccionada)")
+        etapa_sel = st.selectbox("Ver etapa",
+                                  [e["id"] for e in SLA.ETAPAS if e["id"] in sel_etapas],
+                                  format_func=lambda x: etapas_labels[x],
+                                  key="sla_etapa_sel")
+        if etapa_sel and "ejecutivo" in dff_sla.columns:
+            col_dh   = f"dh_{etapa_sel}"
+            col_venc = f"vencido_{etapa_sel}"
+            if col_dh in dff_sla.columns:
+                g = (dff_sla.dropna(subset=[col_dh, "ejecutivo"])
+                     .groupby("ejecutivo")
+                     .agg(
+                         mediana=(col_dh, "median"),
+                         ops=(col_dh, "count"),
+                         vencidos=(col_venc, "sum") if col_venc in dff_sla.columns else (col_dh, lambda x: 0)
+                     ).reset_index()
+                     .sort_values("mediana", ascending=False))
+                g["% SLA ok"] = ((g["ops"] - g["vencidos"]) / g["ops"] * 100).round(1)
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.pyplot(bar_h(g.set_index("ejecutivo")["mediana"].sort_values(),
+                                    f"MEDIANA DH · {etapas_labels[etapa_sel]}", C["amber"],
+                                    fmt="{:.1f}"))
+                with c2:
+                    st.dataframe(g[["ejecutivo", "ops", "mediana", "vencidos", "% SLA ok"]],
+                                 use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("#### Selector libre de fechas · lead time personalizado")
+        col_fechas = [c for c in ["f_llegada", "f_revalida", "f_previo",
+                                   "f_pago", "f_despacho", "f_contabilidad",
+                                   "f_facturacion"] if c in dff_sla.columns]
+        lbl_map = {"f_llegada": "Llegada", "f_revalida": "Recolección",
+                   "f_previo": "Previo", "f_pago": "Pago",
+                   "f_despacho": "Despacho", "f_contabilidad": "Contabilidad",
+                   "f_facturacion": "Facturación"}
+        cs, ce = st.columns(2)
+        with cs:
+            default_idx = col_fechas.index("f_pago") if "f_pago" in col_fechas else (0 if col_fechas else 0)
+            col_inicio = st.selectbox("Desde", col_fechas,
+                                       format_func=lambda x: str(lbl_map.get(x, x)),
+                                       index=default_idx,
+                                       key="lt_inicio")
+        with ce:
+            end_idx = len(col_fechas) - 1 if col_fechas else 0
+            col_fin = st.selectbox("Hasta", col_fechas,
+                                    format_func=lambda x: str(lbl_map.get(x, x)),
+                                    index=end_idx,
+                                    key="lt_fin")
+        if col_inicio != col_fin:
+            dff_sla["_lt_custom"] = dff_sla.apply(
+                lambda r: SLA.dias_habiles(r[col_inicio], r[col_fin], feriados), axis=1)
+            s = dff_sla["_lt_custom"].dropna()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Mediana (dh)", f"{s.median():.1f}")
+            c2.metric("Promedio (dh)", f"{s.mean():.1f}")
+            c3.metric("P90 (dh)", f"{s.quantile(.9):.1f}")
+            c4.metric("Máx (dh)", f"{int(s.max())}")
+            if "ejecutivo" in dff_sla.columns:
+                g2 = dff_sla.dropna(subset=["_lt_custom", "ejecutivo"]) \
+                             .groupby("ejecutivo")["_lt_custom"].median().sort_values()
+                st.pyplot(bar_h(g2, f"MEDIANA DH · {lbl_map.get(col_inicio,col_inicio)} → {lbl_map.get(col_fin,col_fin)}",
+                                C["violet"], fmt="{:.1f}"))
+
+
+# ── APOYO ENTRE EQUIPOS ───────────────────────────────────────────────────────
+with tab_apoyo:
+    st.subheader("Análisis de Apoyo entre Equipos")
+
+    if not clientes_jefe:
+        st.info("⚠️ Primero asigna clientes a jefes en la pestaña **CONFIG CLIENTES** para activar el análisis de apoyo.")
+    elif apoyo_n == 0:
+        st.success("No se detectaron ops de apoyo en la selección actual.")
     else:
-        st.info("Sin datos individuales.")
+        st.caption(f"Se detectaron **{apoyo_n:,}** operaciones de apoyo "
+                   f"({apoyo_n / len(dff_sla) * 100:.1f}% del total)")
 
-# ── EXPORTACIÓN ──────────────────────────────────────────────────────────────
-with tab_exp:
-    st.subheader("Operaciones de Exportación")
-    st.caption("Vista de resumen de la tabla de exportación del reporte.")
-
-    col_l, col_r = st.columns([3, 1])
-    with col_l:
-        # Exportaciones reales desde tabla detalle (tiene datos reales)
-        if "tipo_op" in dff.columns:
-            exp_det = dff[dff["tipo_op"].str.lower().str.contains("export", na=False)]
-            if not exp_det.empty and "ejecutivo" in exp_det.columns:
-                serie_exp = exp_det.groupby("ejecutivo").size().sort_values(ascending=False)
-                st.pyplot(bar_h(serie_exp, "EXPORTACIONES POR EJECUTIVO (DETALLE)", color=C_PINK))
-                # por aduana
-                if "aduana" in exp_det.columns:
-                    serie_udn = exp_det.groupby("aduana").size()
-                    st.pyplot(bar_v(serie_udn, "EXPORTACIONES POR ADUANA", color=C_PINK))
-            else:
-                st.info("Sin exportaciones en la selección actual.")
-        else:
-            st.info("Columna tipo_op no disponible.")
-    with col_r:
-        if not df_exp.empty:
-            st.markdown("**Tabla Resumen (exportación)**")
-            st.dataframe(df_exp, use_container_width=True, hide_index=True)
-
-    # Detalle de exportaciones
-    if "tipo_op" in dff.columns:
-        exp_det = dff[dff["tipo_op"].str.lower().str.contains("export", na=False)]
-        if not exp_det.empty:
-            st.markdown("#### Clientes de Exportación")
-            top_cli = exp_det["cliente"].value_counts().head(10) if "cliente" in exp_det.columns else pd.Series()
-            if not top_cli.empty:
-                st.pyplot(bar_h(top_cli, "TOP 10 CLIENTES DE EXPORTACIÓN", color=C_AMBER))
-
-# ── LEAD TIME ────────────────────────────────────────────────────────────────
-with tab_lt:
-    st.subheader("Análisis de Lead Time")
-    st.caption("Tiempos entre etapas del proceso aduanero.")
-
-    if "lt_total" not in dff.columns:
-        st.info("Columnas de fecha no encontradas.")
-    else:
-        # Resumen etapas
-        etapas = {
-            "Llegada → Pago":       "lt_llegada_pago",
-            "Pago → Despacho":      "lt_pago_despacho",
-            "Despacho → Factura":   "lt_despacho_factura",
-            "Total (Llegada→Fact)": "lt_total",
-        }
-        rows = []
-        for label, col in etapas.items():
-            if col in dff.columns:
-                s = dff[col].dropna()
-                rows.append({"Etapa": label, "Mediana (d)": round(s.median(), 1),
-                             "Promedio (d)": round(s.mean(), 1),
-                             "P90 (d)": round(s.quantile(0.9), 1),
-                             "Máx (d)": int(s.max()) if not s.empty else 0})
-        if rows:
-            df_etapas = pd.DataFrame(rows)
-            col_l, col_r = st.columns([2, 3])
-            with col_l:
-                st.markdown("**Resumen por etapa**")
-                st.dataframe(df_etapas, use_container_width=True, hide_index=True)
-            with col_r:
-                # Barras de medianas
-                serie_et = df_etapas.set_index("Etapa")["Mediana (d)"]
-                st.pyplot(bar_h(serie_et, "MEDIANA DÍAS POR ETAPA", color=C_AMBER,
-                                label_fmt="{:.1f}d"))
+        # KPIs de apoyo
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Ops de apoyo", f"{apoyo_n:,}")
+        a2.metric("Ops propias",  f"{len(dff_sla) - apoyo_n:,}")
+        a3.metric("% Apoyo",      f"{apoyo_n / len(dff_sla) * 100:.1f}%")
 
         st.divider()
 
-        col_l, col_r = st.columns(2)
-        with col_l:
-            fig = scatter_lt(dff, "LEAD TIME POR EJECUTIVO (mediana, tamaño=ops)")
-            if fig:
-                st.pyplot(fig)
-        with col_r:
-            if "aduana" in dff.columns:
-                lt_udn = (
-                    dff.dropna(subset=["lt_total", "aduana"])
-                    .groupby("aduana")["lt_total"]
-                    .agg(["median", "mean", "count"])
-                    .rename(columns={"median": "Mediana", "mean": "Promedio", "count": "Ops"})
-                    .reset_index()
-                )
-                lt_udn[["Mediana", "Promedio"]] = lt_udn[["Mediana", "Promedio"]].round(1)
-                serie_lt_udn = lt_udn.set_index("aduana")["Mediana"]
-                st.pyplot(bar_v(serie_lt_udn, "LEAD TIME MEDIANO POR ADUANA (días)", color=C_AMBER))
+        # Resumen por jefe
+        df_res_apoyo = CLI.resumen_por_jefe(dff_sla)
+        c_l, c_r = st.columns(2)
+        with c_l:
+            st.markdown("#### Ops propias vs apoyo dado por jefe")
+            if not df_res_apoyo.empty:
+                pivot_ap = df_res_apoyo.set_index("Jefe")[["Ops propias", "Apoyo dado"]].sort_values("Ops propias", ascending=False)
+                st.pyplot(multi_bar(pivot_ap, "OPS PROPIAS vs APOYO DADO",
+                                    [C["cyan"], C["amber"]]))
+        with c_r:
+            st.markdown("#### Apoyo recibido por jefe")
+            if not df_res_apoyo.empty:
+                rec = df_res_apoyo.set_index("Jefe")["Apoyo recibido"].sort_values()
+                if rec.sum() > 0:
+                    st.pyplot(bar_h(rec, "APOYO RECIBIDO POR JEFE", C["pink"]))
 
-        # Lead time outliers
-        lt_q90 = dff["lt_total"].quantile(0.9) if "lt_total" in dff.columns else None
-        if lt_q90:
-            outliers = dff[dff["lt_total"] > lt_q90][["pedimento", "ejecutivo", "cliente", "aduana", "lt_total"]].sort_values("lt_total", ascending=False)
-            if not outliers.empty:
-                st.markdown(f"**Outliers · Lead time > P90 ({lt_q90:.0f} días)**")
-                st.dataframe(outliers.head(20), use_container_width=True, hide_index=True)
+        st.divider()
 
-# ── HEATMAP ──────────────────────────────────────────────────────────────────
-with tab_heat:
-    st.subheader("Heatmap Ejecutivo × Aduana")
-    st.caption("Concentración de operaciones por ejecutivo y ubicación.")
+        # Mapa de flujo
+        st.markdown("#### Mapa de flujo · quién apoyó a quién")
+        pivot_flujo = CLI.tabla_apoyo_entre_jefes(dff_sla)
+        if not pivot_flujo.empty:
+            fig_flujo = flujo_apoyo(pivot_flujo)
+            if fig_flujo:
+                st.pyplot(fig_flujo)
+            with st.expander("Ver tabla detalle de flujo"):
+                st.dataframe(pivot_flujo, use_container_width=True, hide_index=True)
 
-    col_l, col_r = st.columns(2)
-    with col_l:
-        fig = heatmap_eje_udn(dff, "OPERACIONES: EJECUTIVO × ADUANA")
-        if fig:
-            st.pyplot(fig)
-        else:
-            st.info("Sin datos suficientes.")
-    with col_r:
-        if "tipo_op" in dff.columns and "aduana" in dff.columns:
-            pivot_tipo_udn = dff.groupby(["aduana", "tipo_op"]).size().unstack(fill_value=0)
-            if not pivot_tipo_udn.empty:
-                st.pyplot(multi_bar(pivot_tipo_udn,
-                                    "IMPORTACIÓN vs EXPORTACIÓN POR ADUANA",
-                                    colors=[C_CYAN, C_PINK]))
+        st.divider()
 
-    # Top clientes global
-    if "cliente" in dff.columns:
-        st.markdown("#### Top Clientes")
-        top_cli = dff["cliente"].value_counts().head(15)
-        st.pyplot(bar_h(top_cli, "TOP 15 CLIENTES POR OPERACIONES", color=C_GREEN))
+        # Ranking clientes con más apoyo externo
+        st.markdown("#### Clientes con más apoyo externo recibido")
+        df_cli_apoyo = CLI.clientes_con_mas_apoyo(dff_sla)
+        if not df_cli_apoyo.empty:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.pyplot(bar_h(df_cli_apoyo.set_index("cliente")["ops_apoyo"],
+                                "TOP CLIENTES POR OPS DE APOYO RECIBIDAS", C["pink"]))
+            with c2:
+                st.dataframe(df_cli_apoyo, use_container_width=True, hide_index=True)
 
-# ── TENDENCIA ────────────────────────────────────────────────────────────────
-with tab_trend:
-    st.subheader("Tendencia Mensual")
-    st.caption("Evolución de operaciones a lo largo del tiempo.")
+        st.divider()
 
-    fig_trend = timeline_ops(dff, "OPERACIONES MENSUALES — IMPORTACIÓN vs EXPORTACIÓN")
-    if fig_trend:
-        st.pyplot(fig_trend)
+        # Comparativa ops propias vs apoyo por ejecutivo
+        st.markdown("#### Ops propias vs apoyo por ejecutivo")
+        if "ejecutivo" in dff_sla.columns:
+            pivot_eje = (dff_sla.groupby(["ejecutivo", "tipo_participacion"])
+                         .size().unstack(fill_value=0))
+            if "Propia" in pivot_eje.columns or "Apoyo dado" in pivot_eje.columns:
+                cols_piv = [c for c in ["Propia", "Apoyo dado"] if c in pivot_eje.columns]
+                pivot_eje = pivot_eje[cols_piv].sort_values(
+                    cols_piv[0], ascending=False).head(20)
+                st.pyplot(multi_bar(pivot_eje,
+                                    "OPS PROPIAS vs APOYO DADO POR EJECUTIVO",
+                                    [C["cyan"], C["amber"]]))
+
+
+# ── EXPORTACIÓN ───────────────────────────────────────────────────────────────
+with tab_exp:
+    st.subheader("Operaciones de Exportación")
+    exp_df = dff_sla[dff_sla["tipo_op"].astype(str).str.lower()
+                     .str.contains("export", na=False)] \
+             if "tipo_op" in dff_sla.columns else pd.DataFrame()
+    if exp_df.empty:
+        st.info("Sin exportaciones en la selección.")
     else:
-        st.info("Sin datos de fecha disponibles.")
+        c_l, c_r = st.columns(2)
+        with c_l:
+            if "ejecutivo" in exp_df.columns:
+                st.pyplot(bar_h(exp_df.groupby("ejecutivo").size().sort_values(),
+                                "EXPORTACIONES POR EJECUTIVO", C["pink"]))
+        with c_r:
+            if "aduana" in exp_df.columns:
+                st.pyplot(bar_v(exp_df.groupby("aduana").size(),
+                                "EXPORTACIONES POR ADUANA", C["pink"]))
+        if "cliente" in exp_df.columns:
+            st.pyplot(bar_h(exp_df["cliente"].value_counts().head(10),
+                            "TOP 10 CLIENTES EXPORTACIÓN", C["amber"]))
 
-    # Lead time tendencia mensual
-    if "lt_total" in dff.columns and "mes" in dff.columns:
-        lt_mes = (
-            dff.dropna(subset=["lt_total", "mes"])
-            .groupby("mes")["lt_total"]
-            .agg(["median", "mean"])
-            .rename(columns={"median": "Mediana", "mean": "Promedio"})
-            .reset_index()
-        )
-        if not lt_mes.empty:
-            lt_mes_series = lt_mes.set_index("mes")[["Mediana", "Promedio"]]
-            st.pyplot(multi_bar(lt_mes_series.sort_index(),
-                                "LEAD TIME MENSUAL (días)",
-                                colors=[C_CYAN, C_AMBER]))
 
-    # Ejecutivos más activos por mes
-    if "ejecutivo" in dff.columns and "mes" in dff.columns:
-        top5_eje = dff["ejecutivo"].value_counts().head(5).index.tolist()
-        dff_top = dff[dff["ejecutivo"].isin(top5_eje)]
-        if not dff_top.empty:
-            pivot_eje_mes = dff_top.groupby(["mes", "ejecutivo"]).size().unstack(fill_value=0).sort_index()
-            clrs5 = [C_CYAN, C_VIOLET, C_PINK, C_AMBER, C_GREEN]
-            st.pyplot(multi_bar(pivot_eje_mes,
-                                "TOP 5 EJECUTIVOS — OPERACIONES POR MES",
-                                colors=clrs5))
+# ── HEATMAP ───────────────────────────────────────────────────────────────────
+with tab_heat:
+    st.subheader("Heatmaps")
+    c_l, c_r = st.columns(2)
+    with c_l:
+        if "ejecutivo" in dff_sla.columns and "aduana" in dff_sla.columns:
+            pv = dff_sla.groupby(["ejecutivo", "aduana"]).size().unstack(fill_value=0)
+            st.pyplot(heatmap(pv, "OPS: EJECUTIVO × ADUANA"))
+    with c_r:
+        if "tipo_op" in dff_sla.columns and "aduana" in dff_sla.columns:
+            pv2 = dff_sla.groupby(["aduana", "tipo_op"]).size().unstack(fill_value=0)
+            st.pyplot(multi_bar(pv2, "IMP vs EXP POR ADUANA", [C["cyan"], C["pink"]]))
+    if "cliente" in dff_sla.columns:
+        st.pyplot(bar_h(dff_sla["cliente"].value_counts().head(15),
+                        "TOP 15 CLIENTES", C["green"]))
 
-# ── RAW DATA ─────────────────────────────────────────────────────────────────
+
+# ── TENDENCIA ─────────────────────────────────────────────────────────────────
+with tab_trend:
+    st.subheader("Tendencia Histórica")
+    if len(sel_periodos) < 2:
+        st.info("Selecciona ≥2 periodos para ver tendencia.")
+    else:
+        if "tipo_op" in dff_sla.columns and "periodo" in dff_sla.columns:
+            pv = dff_sla.groupby(["periodo", "tipo_op"]).size().unstack(fill_value=0).sort_index()
+            if not pv.empty:
+                st.pyplot(line_trend(pv, "OPS POR PERIODO Y TIPO", [C["cyan"], C["pink"]]))
+
+        # SLA cumplimiento por periodo
+        if "periodo" in dff_sla.columns and venc_cols:
+            pct_per = (dff_sla.groupby("periodo")
+                       .apply(lambda g: 100 - g[venc_cols].any(axis=1).mean() * 100)
+                       .rename("% SLA cumplido").sort_index())
+            if not pct_per.empty:
+                fig, ax = _ax(max(6, len(pct_per) * 1.1), 4)
+                pct_vals = pct_per.to_numpy()
+                ax.plot(range(len(pct_per)), pct_vals, color=C["green"], lw=2, zorder=3)
+                ax.fill_between(range(len(pct_per)), pct_vals, alpha=.1, color=C["green"])
+                ax.scatter(range(len(pct_per)), pct_vals, color=C["green"], s=35, zorder=4)
+                ax.axhline(90, color=C["amber"], lw=1, ls="--", alpha=.6)
+                ax.set_xticks(range(len(pct_per)))
+                ax.set_xticklabels(pct_per.index, rotation=30, ha="right", fontsize=8)
+                ax.set_ylim(0, 105)
+                ax.set_title("% CUMPLIMIENTO SLA POR PERIODO", color="#C9D4E8",
+                             fontsize=9, fontfamily="monospace", pad=8, loc="left")
+                plt.tight_layout()
+                st.pyplot(fig)
+
+        if "ejecutivo" in dff_sla.columns and "periodo" in dff_sla.columns:
+            top5 = dff_sla["ejecutivo"].value_counts().head(5).index
+            pv_eje = (dff_sla[dff_sla["ejecutivo"].isin(top5)]
+                      .groupby(["periodo", "ejecutivo"]).size()
+                      .unstack(fill_value=0).sort_index())
+            if not pv_eje.empty:
+                st.pyplot(multi_bar(pv_eje, "TOP 5 EJECUTIVOS POR PERIODO", CLRS5))
+
+
+# ── CONFIG EQUIPOS ────────────────────────────────────────────────────────────
+with tab_cfg_eq:
+    st.subheader("Configurar Equipos")
+    equipos_actual = core.load_equipos()
+    todos_eje = sorted(dff_sla["ejecutivo"].dropna().unique()) \
+                if "ejecutivo" in dff_sla.columns else []
+
+    c_l, c_r = st.columns([1, 2])
+    with c_l:
+        sel_j = st.selectbox("Jefe", ["➕ Nuevo"] + list(equipos_actual.keys()), key="cfge_j")
+    with c_r:
+        if sel_j == "➕ Nuevo":
+            nj = st.text_input("Nombre del nuevo jefe")
+            mbs = st.multiselect("Integrantes", todos_eje, key="cfge_n")
+            if st.button("Crear") and nj:
+                equipos_actual[nj.upper()] = mbs
+                core.save_equipos(equipos_actual); st.success("Creado."); st.rerun()
+        else:
+            mbs_e = st.multiselect("Integrantes", todos_eje,
+                                    default=[m for m in equipos_actual.get(sel_j, []) if m in todos_eje],
+                                    key="cfge_e")
+            cs, cd = st.columns(2)
+            with cs:
+                if st.button("💾 Guardar", type="primary", key="cfge_save"):
+                    equipos_actual[sel_j] = mbs_e
+                    core.save_equipos(equipos_actual); st.success("Guardado."); st.rerun()
+            with cd:
+                if st.button("🗑 Eliminar", type="secondary", key="cfge_del"):
+                    equipos_actual.pop(sel_j, None)
+                    core.save_equipos(equipos_actual); st.success("Eliminado."); st.rerun()
+
+    st.divider()
+    rows_e = [{"Jefe": j, "Integrante": m}
+              for j, mbs in equipos_actual.items() for m in mbs]
+    if rows_e:
+        st.dataframe(pd.DataFrame(rows_e), use_container_width=True, hide_index=True)
+
+    with st.expander("Editar JSON"):
+        jt = st.text_area("JSON", value=json.dumps(equipos_actual,
+                           ensure_ascii=False, indent=2), height=250)
+        if st.button("Aplicar JSON", key="cfge_json"):
+            try:
+                core.save_equipos(json.loads(jt)); st.success("OK"); st.rerun()
+            except json.JSONDecodeError as e:
+                st.error(f"JSON inválido: {e}")
+
+
+# ── CONFIG CLIENTES POR JEFE ──────────────────────────────────────────────────
+with tab_cfg_cli:
+    st.subheader("Asignación de Clientes por Jefe")
+    st.caption("Define qué clientes son responsabilidad de cada jefe. "
+               "Esto permite detectar automáticamente las operaciones de apoyo.")
+
+    cli_actual = core.load_clientes_jefe()
+    todos_clientes = sorted(dff_sla["cliente"].dropna().astype(str).unique()) \
+                     if "cliente" in dff_sla.columns else []
+    jefes_lista = list(equipos_cfg.keys())
+
+    if not jefes_lista:
+        st.warning("Primero configura los jefes de equipo en la pestaña CONFIG EQUIPOS.")
+    else:
+        c_l, c_r = st.columns([1, 2])
+        with c_l:
+            sel_jcli = st.selectbox("Jefe", jefes_lista, key="cfgcli_j")
+        with c_r:
+            clientes_actuales = cli_actual.get(sel_jcli, [])
+            clientes_nuevos = st.multiselect(
+                "Clientes a cargo", todos_clientes,
+                default=[c for c in clientes_actuales if c in todos_clientes],
+                key="cfgcli_sel"
+            )
+            if st.button("💾 Guardar asignación", type="primary", key="cfgcli_save"):
+                cli_actual[sel_jcli] = clientes_nuevos
+                core.save_clientes_jefe(cli_actual)
+                st.success(f"Asignados {len(clientes_nuevos)} clientes a **{sel_jcli}**.")
+                st.rerun()
+
+        st.divider()
+        st.markdown("**Asignaciones actuales**")
+        rows_cli = [{"Jefe": j, "Cliente": c}
+                    for j, cls in cli_actual.items() for c in cls]
+        if rows_cli:
+            df_cli_t = pd.DataFrame(rows_cli)
+            # Mostrar con conteo de ops reales
+            if "cliente" in dff_sla.columns:
+                ops_por_cli = dff_sla.groupby("cliente").size().rename("Ops (filtro actual)")
+                df_cli_t = df_cli_t.merge(ops_por_cli, left_on="Cliente",
+                                           right_index=True, how="left")
+            st.dataframe(df_cli_t.sort_values("Jefe"), use_container_width=True, hide_index=True)
+
+            # Clientes sin asignar
+            asignados = set(c for cls in cli_actual.values() for c in cls)
+            sin_asignar = [c for c in todos_clientes if c not in asignados]
+            if sin_asignar:
+                with st.expander(f"⚠️ {len(sin_asignar)} clientes sin asignar"):
+                    st.dataframe(pd.DataFrame({"Cliente": sin_asignar}),
+                                 use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay asignaciones aún. Selecciona un jefe y sus clientes arriba.")
+
+        with st.expander("Editar JSON directamente"):
+            jt2 = st.text_area("JSON", value=json.dumps(cli_actual,
+                                ensure_ascii=False, indent=2), height=250)
+            if st.button("Aplicar JSON", key="cfgcli_json"):
+                try:
+                    core.save_clientes_jefe(json.loads(jt2)); st.success("OK"); st.rerun()
+                except json.JSONDecodeError as e:
+                    st.error(f"JSON inválido: {e}")
+
+
+# ── CONFIG FERIADOS ───────────────────────────────────────────────────────────
+with tab_cfg_fer:
+    st.subheader("Feriados Adicionales")
+    st.caption("Los feriados oficiales México ya están incluidos automáticamente. "
+               "Agrega aquí feriados aduanales o días puente específicos.")
+
+    feriados_extra_actual = core.load_feriados_extra()
+
+    # Mostrar feriados oficiales del año actual como referencia
+    with st.expander("📅 Ver feriados oficiales México incluidos"):
+        import datetime
+        anos = [datetime.date.today().year, datetime.date.today().year + 1]
+        fer_of = SLA.get_feriados([])
+        fer_of_df = pd.DataFrame({"Fecha": fer_of.strftime("%Y-%m-%d"),
+                                   "Día": fer_of.strftime("%A")})
+        st.dataframe(fer_of_df[fer_of_df["Fecha"] >= f"{min(anos)}-01-01"]
+                     .head(20), use_container_width=True, hide_index=True)
+
+    st.markdown("**Agregar feriado extra**")
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        nueva_fecha = st.date_input("Fecha", key="fer_nueva")
+    with c2:
+        desc = st.text_input("Descripción (opcional)", key="fer_desc")
+        if st.button("➕ Agregar", key="fer_add"):
+            iso = str(nueva_fecha)
+            if iso not in feriados_extra_actual:
+                feriados_extra_actual.append(iso)
+                feriados_extra_actual.sort()
+                core.save_feriados_extra(feriados_extra_actual)
+                st.success(f"Feriado **{iso}** agregado.")
+                st.rerun()
+            else:
+                st.warning("Esa fecha ya está en la lista.")
+
+    if feriados_extra_actual:
+        st.markdown("**Feriados extra configurados**")
+        for i, f in enumerate(feriados_extra_actual):
+            c1, c2 = st.columns([3, 1])
+            c1.write(f)
+            if c2.button("🗑", key=f"fer_del_{i}"):
+                feriados_extra_actual.remove(f)
+                core.save_feriados_extra(feriados_extra_actual)
+                st.rerun()
+    else:
+        st.info("Sin feriados extra configurados.")
+
+
+# ── RAW DATA ──────────────────────────────────────────────────────────────────
 with tab_raw:
-    st.subheader("Tabla transaccional completa")
-
-    # Búsqueda rápida
-    search = st.text_input("🔍 Buscar (cliente, ejecutivo, pedimento…)", placeholder="Escribe para filtrar…")
-    dfr = dff.copy()
+    st.subheader("Datos transaccionales")
+    search = st.text_input("🔍 Buscar…", placeholder="Cliente, ejecutivo, pedimento…")
+    dfr = dff_sla.copy()
     if search:
-        mask_search = dfr.astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
-        dfr = dfr[mask_search]
-    st.caption(f"{len(dfr):,} filas")
+        mask = dfr.astype(str).apply(
+            lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
+        dfr = dfr[mask]
 
-    cols_display = [c for c in dfr.columns if not c.startswith("lt_") or c == "lt_total"]
-    st.dataframe(dfr[cols_display], use_container_width=True, hide_index=True)
+    # Columnas visibles (excluir internas)
+    excluir = {"dh_total_op", "jefe_ejecutivo", "jefe_cliente",
+               "es_apoyo", "tipo_participacion"}
+    visible = [c for c in dfr.columns
+               if not c.startswith("dh_") and not c.startswith("vencido_")
+               and c not in excluir]
+    # Añadir columnas útiles si existen
+    extra = [c for c in ["dh_total_op", "tipo_participacion", "jefe_ejecutivo"]
+             if c in dfr.columns]
+    visible = visible + extra
 
-    col_dl1, col_dl2 = st.columns([1, 5])
-    with col_dl1:
-        csv = dfr[cols_display].to_csv(index=False).encode("utf-8")
-        st.download_button("⬇ CSV", csv, "operaciones_filtradas.csv", "text/csv")
+    st.caption(f"{len(dfr):,} filas · {len(visible)} columnas")
+    st.dataframe(dfr[visible], use_container_width=True, hide_index=True)
+    st.download_button("⬇ CSV", dfr[visible].to_csv(index=False).encode("utf-8"),
+                       "operaciones.csv", "text/csv")
