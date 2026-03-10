@@ -16,9 +16,11 @@ import io
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
+
 
 import pandas as pd
 
@@ -120,7 +122,7 @@ def _sb_upsert(table: str, rows: list[dict]):
 
 
 def _sb_delete_periodo(periodo: str):
-    import urllib.parse
+    
     sec = _sb_secrets()
     if sec is None:
         raise RuntimeError("Supabase not configured in secrets")
@@ -140,8 +142,9 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
                 rec[k] = v.isoformat() if pd.notna(v) and hasattr(v, "isoformat") else None
             elif not isinstance(v, (list, dict)) and pd.isna(v):
                 rec[k] = None
-            elif hasattr(v, "item"):
-                rec[k] = v.item()
+            elif hasattr(v, "item") and callable(getattr(v, "item")):
+                # Usamos getattr para ejecutar .item() sin que Pylance marque error de tipos
+                rec[k] = getattr(v, "item")()
             else:
                 rec[k] = v
         out.append(rec)
@@ -252,11 +255,10 @@ def _gh_load_detalle() -> pd.DataFrame:
 
 def _gh_save_detalle(df: pd.DataFrame):
     buf = io.BytesIO()
-    pd.to_pickle(df, buf)
+    df.to_pickle(buf)     
     existing = _gh_get_file("data/historico.pkl")
     sha = existing[1] if existing else None
     _gh_put_file("data/historico.pkl", buf.getvalue(), "chore: actualizar histórico", sha)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # API PÚBLICA — todo trabaja con un solo DataFrame de detalle
@@ -314,8 +316,7 @@ def _save_detalle(df: pd.DataFrame):
     if _backend() == "github":
         _gh_save_detalle(df)
     else:
-        pd.to_pickle(df, HISTORICO_PKL)
-
+        df.to_pickle(HISTORICO_PKL)      
 
 def delete_periodo(periodo: str) -> str:
     if _backend() == "supabase":
@@ -334,24 +335,23 @@ def delete_periodo(periodo: str) -> str:
 
 DEFAULT_EQUIPOS: dict = {
     "VANESSA TAPIA GARCIA": [
-        "JAQUELIN CAROLINA CARMONA ROMERO", "SHARON CANALES",
-        "MARIA NICOLAS CELIS", "NATALIA ORTIZ",
-        "ERICK ALEJANDRO RIOS VANEGAS", "ERIKA LÓPEZ ALVAREZ",
+        "VANESSA TAPIA GARCIA", "JAQUELIN CAROLINA CARMONA ROMERO", "SHARON CANALES"
+        
     ],
-    "BERNARDO RODRIGUEZ SERRANO": ["BERNARDO RODRIGUEZ SERRANO"],
+    "BERNARDO RODRIGUEZ SERRANO": ["BERNARDO RODRIGUEZ SERRANO", "MARIA NICOLAS CELIS","JENNIFER MARGARITA ZAMUDIO CAMACHO"
+    ""],
     "BEATRIZ CABRERA HERNANDEZ": [
-        "BEATRIZ CABRERA", "ARIADNA ROA MONROY",
-        "DIANA LAURA CARBAJAL VILLALPANDO",
+        "BEATRIZ CABRERA ", "ROSA ITZELA ROSALES URBINA",
+        "DULCE PALOMA RAMIREZ GRIJALVA"
     ],
     "DIANA LAURA CARBAJAL": [
-        "DIANA LAURA CARBAJAL VILLALPANDO", "MICHEL BARRERA REYES",
+        "DIANA LAURA CARBAJAL VILLALPANDO", "ERIKA LÓPEZ ALVAREZ", "ERICK ALEJANDRO RIOS VANEGAS"
     ],
-    "JENNIFER MARGARITA ZAMUDIO CAMACHO": [
-        "JENNIFER MARGARITA ZAMUDIO CAMACHO", "ROSA ITZELA ROSALES URBINA",
-        "DULCE PALOMA RAMIREZ GRIJALVA", "MILKA JULIAN ANTONIO",
-    ],
+
     "XOCHITL BERENICE LEYVA GARAY": ["XOCHITL BERENICE LEYVA GARAY"],
     "SERGIO MORENO VENEGAS":        ["SERGIO MORENO VENEGAS"],
+    "NATALIA ORTIZ":                ["NATALIA ORTIZ"],
+    "ADRIANA ROA MONROY:       ": ["ADRIANA ROA MONROY"],
 }
 
 
