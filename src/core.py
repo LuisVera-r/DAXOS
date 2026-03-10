@@ -48,15 +48,35 @@ COL_RENAME = {
 FECHAS = ["f_generacion", "f_llegada", "f_revalida", "f_previo",
           "f_pago", "f_despacho", "f_contabilidad", "f_facturacion"]
 
-# Columnas que existen en la tabla ce_detalle de Supabase.
-# Si agregas t_carga en Supabase (ver README), inclúyela aquí también.
+# Columnas base que SIEMPRE existen en ce_detalle de Supabase.
+# Cualquier columna extra del Excel que no esté aquí se descarta
+# automáticamente antes del upsert, evitando errores HTTP 400.
 SB_COLUMNAS = {
     "periodo", "mes", "aduana", "importador_id", "importador_nombre",
-    "cliente", "ejecutivo", "tipo_op", "t_carga", "referencia", "pedimento",
+    "cliente", "ejecutivo", "tipo_op", "referencia", "pedimento",
     "f_generacion", "f_llegada", "f_revalida", "f_previo", "f_pago",
     "f_despacho", "f_contabilidad", "f_facturacion",
     "lt_total", "lt_llegada_pago", "lt_pago_despacho", "lt_despacho_factura",
 }
+
+# Cache de columnas reales de Supabase (se rellena la primera vez)
+_SB_COLUMNAS_REAL: "set | None" = None
+
+
+def _get_sb_columnas() -> set:
+    """Detecta automáticamente las columnas reales de ce_detalle en Supabase."""
+    global _SB_COLUMNAS_REAL
+    if _SB_COLUMNAS_REAL is not None:
+        return _SB_COLUMNAS_REAL
+    try:
+        rows = _sb_req("GET", "ce_detalle", params={"select": "*", "limit": "1"})
+        if rows:
+            _SB_COLUMNAS_REAL = set(rows[0].keys())
+            return _SB_COLUMNAS_REAL
+    except Exception:
+        pass
+    _SB_COLUMNAS_REAL = SB_COLUMNAS.copy()
+    return _SB_COLUMNAS_REAL
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,12 +165,14 @@ def _sb_delete_periodo(periodo: str):
 
 
 def _df_to_records(df: pd.DataFrame) -> list[dict]:
+    # Obtener columnas reales de Supabase para filtrar las desconocidas
+    columnas_validas = _get_sb_columnas()
     out = []
     for row in df.to_dict("records"):
         rec = {}
         for k, v in row.items():
-            # Ignorar columnas que no existen en el esquema de Supabase
-            if k not in SB_COLUMNAS:
+            # Ignorar columnas que no existen en Supabase (evita HTTP 400)
+            if k not in columnas_validas:
                 continue
             if k in FECHAS:
                 rec[k] = v.isoformat() if pd.notna(v) and hasattr(v, "isoformat") else None
