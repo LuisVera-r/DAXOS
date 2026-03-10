@@ -36,7 +36,8 @@ UBICACIONES = ["AICM", "AIFA", "GUADALAJARA", "MONTERREY", "TOLUCA", "QUERETARO"
 COL_RENAME = {
     "UDN": "aduana", "# Importador": "importador_id",
     "Nombre Importador": "importador_nombre", "Cliente": "cliente",
-    "Ejecutivo": "ejecutivo", "TO": "tipo_op", "Referencia": "referencia",
+    "Ejecutivo": "ejecutivo", "TO": "tipo_op", "T. Carga": "t_carga",
+    "Referencia": "referencia",
     "Pedimento": "pedimento", "Fecha Generación": "f_generacion",
     "Fecha Llegada": "f_llegada", "Fecha Revalida": "f_revalida",
     "Fecha de Previo": "f_previo", "Fech Pago": "f_pago",
@@ -46,6 +47,16 @@ COL_RENAME = {
 }
 FECHAS = ["f_generacion", "f_llegada", "f_revalida", "f_previo",
           "f_pago", "f_despacho", "f_contabilidad", "f_facturacion"]
+
+# Columnas que existen en la tabla ce_detalle de Supabase.
+# Si agregas t_carga en Supabase (ver README), inclúyela aquí también.
+SB_COLUMNAS = {
+    "periodo", "mes", "aduana", "importador_id", "importador_nombre",
+    "cliente", "ejecutivo", "tipo_op", "t_carga", "referencia", "pedimento",
+    "f_generacion", "f_llegada", "f_revalida", "f_previo", "f_pago",
+    "f_despacho", "f_contabilidad", "f_facturacion",
+    "lt_total", "lt_llegada_pago", "lt_pago_despacho", "lt_despacho_factura",
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -138,12 +149,14 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
     for row in df.to_dict("records"):
         rec = {}
         for k, v in row.items():
+            # Ignorar columnas que no existen en el esquema de Supabase
+            if k not in SB_COLUMNAS:
+                continue
             if k in FECHAS:
                 rec[k] = v.isoformat() if pd.notna(v) and hasattr(v, "isoformat") else None
             elif not isinstance(v, (list, dict)) and pd.isna(v):
                 rec[k] = None
             elif hasattr(v, "item") and callable(getattr(v, "item")):
-                # Usamos getattr para ejecutar .item() sin que Pylance marque error de tipos
                 rec[k] = getattr(v, "item")()
             else:
                 rec[k] = v
