@@ -203,36 +203,49 @@ def _records_to_df(rows: list[dict]) -> pd.DataFrame:
 
 
 def _sb_load_detalle() -> pd.DataFrame:
-    """Carga todos los registros paginando de 1000 en 1000 (Supabase limita por defecto)."""
+    """Carga todos los registros paginando con Range headers (soporta max_rows=200 de Supabase)."""
     sec = _sb_secrets()
     if sec is None:
         return pd.DataFrame()
-    PAGE = 1000
+    PAGE = 200  # Supabase devuelve máx 200 filas por defecto
     all_rows: list[dict] = []
-    offset = 0
+    start = 0
     while True:
-        url = (f"{sec['url']}/rest/v1/ce_detalle"
-               f"?select=*&limit={PAGE}&offset={offset}")
+        end = start + PAGE - 1
+        url = f"{sec['url']}/rest/v1/ce_detalle?select=*"
         headers = {
             "apikey": sec["key"],
             "Authorization": f"Bearer {sec['key']}",
             "Content-Type": "application/json",
-            "Prefer": "count=none",
+            "Range-Unit": "items",
+            "Range": f"{start}-{end}",
+            "Prefer": "count=exact",
         }
         req = urllib.request.Request(url, headers=headers)
         try:
             with urllib.request.urlopen(req) as resp:
+                content_range = resp.headers.get("Content-Range", "")
                 chunk = json.loads(resp.read())
         except urllib.error.HTTPError as e:
+            if e.code == 416:  # Range Not Satisfiable = ya no hay más filas
+                break
             raise RuntimeError(
                 f"Supabase load detalle HTTP {e.code}: {e.read().decode()}"
             ) from e
         if not chunk:
             break
         all_rows.extend(chunk)
+        # Verificar si ya obtuvimos todo usando Content-Range: inicio-fin/total
+        if content_range:
+            try:
+                total = int(content_range.split("/")[1])
+                if start + len(chunk) >= total:
+                    break
+            except Exception:
+                pass
         if len(chunk) < PAGE:
             break
-        offset += PAGE
+        start += PAGE
     return _records_to_df(all_rows)
 
 
@@ -370,10 +383,10 @@ def add_periodo(parsed: dict) -> tuple[bool, str]:
 
     if _backend() == "supabase":
         if _sb_periodo_exists(periodo):
-            return False, f"El periodo **{periodo}** ya existe. Se omitió."
+            return False, f"El periodo {periodo} ya existe. Se omitio."
         det_nuevo["mes"] = det_nuevo["mes"].astype(str) if "mes" in det_nuevo.columns else ""
         _sb_upsert("ce_detalle", _df_to_records(det_nuevo))
-        return True, f"Periodo **{periodo}** guardado en Supabase ✓"
+        return True, f"Periodo {periodo} guardado correctamente ({len(det_nuevo)} registros)."
 
     # github / local
     df_actual = get_detalle()
