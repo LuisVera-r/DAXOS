@@ -238,10 +238,13 @@ with st.sidebar:
             try:
                 parsed = core.parse_excel(uploaded.read())
                 is_new, msg = core.add_periodo(parsed)
-                st.success(msg) if is_new else st.warning(msg)
-                if is_new: st.cache_data.clear()
+                if is_new:
+                    st.success("✅ Subido correctamente")
+                    st.cache_data.clear()
+                else:
+                    st.warning("⚠️ El periodo ya existe")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"❌ Error al subir: {e}")
 
     st.divider()
 
