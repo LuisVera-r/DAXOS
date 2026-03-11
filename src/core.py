@@ -148,8 +148,14 @@ def _sb_upsert(table: str, rows: list[dict]):
                    "Prefer": "resolution=merge-duplicates,return=minimal"}
         req = urllib.request.Request(url, data=json.dumps(chunk).encode(),
                                      headers=headers, method="POST")
-        with urllib.request.urlopen(req):
-            pass
+        try:
+            with urllib.request.urlopen(req):
+                pass
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            raise RuntimeError(
+                f"Supabase upsert {table} HTTP {e.code}: {body}"
+            ) from e
 
 
 def _sb_delete_periodo(periodo: str):
@@ -197,8 +203,37 @@ def _records_to_df(rows: list[dict]) -> pd.DataFrame:
 
 
 def _sb_load_detalle() -> pd.DataFrame:
-    rows = _sb_req("GET", "ce_detalle", params={"select": "*"})
-    return _records_to_df(rows or [])
+    """Carga todos los registros paginando de 1000 en 1000 (Supabase limita por defecto)."""
+    sec = _sb_secrets()
+    if sec is None:
+        return pd.DataFrame()
+    PAGE = 1000
+    all_rows: list[dict] = []
+    offset = 0
+    while True:
+        url = (f"{sec['url']}/rest/v1/ce_detalle"
+               f"?select=*&limit={PAGE}&offset={offset}")
+        headers = {
+            "apikey": sec["key"],
+            "Authorization": f"Bearer {sec['key']}",
+            "Content-Type": "application/json",
+            "Prefer": "count=none",
+        }
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                chunk = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(
+                f"Supabase load detalle HTTP {e.code}: {e.read().decode()}"
+            ) from e
+        if not chunk:
+            break
+        all_rows.extend(chunk)
+        if len(chunk) < PAGE:
+            break
+        offset += PAGE
+    return _records_to_df(all_rows)
 
 
 def _sb_periodo_exists(periodo: str) -> bool:
@@ -211,7 +246,10 @@ def _sb_periodo_exists(periodo: str) -> bool:
 
 
 def _sb_get_periodos() -> list[str]:
-    rows = _sb_req("GET", "ce_detalle", params={"select": "periodo"})
+    """Obtiene periodos únicos usando GROUP BY para evitar límite de filas."""
+    # Usar distinct para no depender del límite de filas
+    rows = _sb_req("GET", "ce_detalle",
+                   params={"select": "periodo", "limit": "5000"})
     if not rows:
         return []
     return sorted({r["periodo"] for r in rows if r.get("periodo")})
@@ -487,6 +525,10 @@ def parse_excel(file_bytes: bytes) -> dict:
     det["periodo"] = periodo
     if "f_llegada" in det.columns:
         det["mes"] = det["f_llegada"].dt.to_period("M").astype(str)
+
+    # Conservar solo columnas conocidas para evitar HTTP 400 en Supabase
+    cols_conocidas = list(SB_COLUMNAS)
+    det = det[[c for c in det.columns if c in cols_conocidas]]
 
     return {"detalle": det, "periodo": periodo}
 
